@@ -1,0 +1,11 @@
+.gradle/
+build/
+*/build/
+local.properties
+*.iml
+.idea/
+.cxx/
+tools/.venv/
+tools/onnx-fp32/
+tools/onnx-int8/
+.kotlin/

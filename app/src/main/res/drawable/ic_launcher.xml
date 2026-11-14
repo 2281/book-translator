@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Иконка-заглушка (этап 0). Финальная иконка — этап 5. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="48dp"
+    android:height="48dp"
+    android:viewportWidth="48"
+    android:viewportHeight="48">
+    <path
+        android:fillColor="#4A6FA5"
+        android:pathData="M4,4h40v40h-40z" />
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M12,10h10c3,0 5,2 5,5v23c0,-3 -2,-5 -5,-5h-10zM36,10h-10c-3,0 -5,2 -5,5v23c0,-3 2,-5 5,-5h10z" />
+</vector>

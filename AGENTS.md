@@ -1,0 +1,78 @@
+# AGENTS.md
+
+## Обзор проекта
+
+Мобильное приложение для Android — читалка книг с функцией перевода слов
+(английский → русский) по нажатию на слово. Описание продукта — в `README.md`,
+план реализации по этапам — в `ROADMAP.md`.
+
+Ключевая особенность: оффлайн-перевод слов моделью Helsinki-NLP
+`opus-mt-en-ru`, конвертированной в ONNX, выполнение на устройстве через
+ONNX Runtime.
+
+## Технологический стек
+
+- **Язык:** Kotlin 2.0.x, JVM target 17 (OpenJDK 17).
+- **UI:** Jetpack Compose (Material 3).
+- **Сборка:** Gradle 8.10.2 (wrapper), Android Gradle Plugin 8.7.x,
+  compileSdk/targetSdk 35, minSdk 24.
+- **Хранение:** Room (каталог книг, кэш переводов), DataStore (настройки).
+- **Перевод:** ONNX Runtime (`com.microsoft.onnxruntime:onnxruntime-android:1.20.0`),
+  токенизация SentencePiece как custom ops из
+  `onnxruntime-extensions-android:0.13.0` (класс `OrtxPackage`).
+  Модель: Helsinki-NLP `opus-mt-en-ru` → ONNX (encoder + decoder, int8).
+  ВАЖНО: у opus-mt нумерация id в vocab.json отличается от нумерации внутри
+  .spm — токенизаторные графы содержат remap-таблицы (см. `tools/`).
+- **Жизненный цикл модели:** переводчик — синглтон в `BookTranslatorApp`,
+  веса прогреваются в фоне при старте приложения и живут, пока жив процесс.
+  Инференс через NNAPI (GPU/DSP при наличии), остальное — на CPU.
+- **Android SDK:** `~/Android/Sdk` (platform android-35, build-tools 34.0.0).
+
+## Сборка и тестирование
+
+```bash
+./gradlew assembleDebug          # собрать debug APK (app/build/outputs/apk/debug/)
+./gradlew assembleRelease        # release APK (на этапе 5 — подписанный)
+./gradlew installDebug           # установить на подключённое устройство (adb)
+./gradlew test                   # unit-тесты
+./gradlew connectedAndroidTest   # инструментальные тесты (нужно устройство/эмулятор)
+```
+
+## Структура кода
+
+(Заполняется по мере появления кода; обновлять при изменениях.)
+
+- `app/` — единственный модуль приложения, пакет `com.booktranslator`.
+  - `MainActivity.kt` — точка входа, навигация (каталог ↔ чтение).
+  - `model/BookContent.kt` — единое представление книги (абзацы).
+  - `parse/BookParser.kt` — разбор файлов в `BookContent` (пока txt).
+  - `data/db/` — Room: `BookEntity`, `BookDao`, `AppDatabase`.
+  - `data/BookRepository.kt` — импорт файлов, позиция чтения, удаление.
+  - `data/settings/` — настройки чтения (`ReaderSettings`, `SettingsRepository`
+    на DataStore): шрифт, размер, цвета, фоновое изображение.
+  - `translate/` — перевод: интерфейс `Translator`, `OnnxTranslator`
+    (инференс ONNX: tok-encode → encoder → жадный декодер → tok-decode),
+    `CachingTranslator` (кэш в Room).
+  - `model/WordSpan.kt` — разбиение текста на кликабельные слова.
+  - `ui/catalog/` — экран каталога (список, добавление, удаление книг).
+  - `ui/reader/` — экран чтения (прокрутка, сохранение позиции,
+    панель настроек `ReaderSettingsSheet`, кликабельные слова с заменой
+    переводом, плашка с переводом).
+  - `app/src/main/assets/model/` — int8 ONNX-модели encoder/decoder +
+    токенизаторные графы tok-encode/tok-decode (всего ~140 МБ).
+- `tools/` — инструменты конвертации модели (venv, скрипты
+  `build_tokenizers.py`, `test_translate.py`, исходные файлы HF в `tools/hf/`).
+  Не нужны для сборки приложения.
+- `samples/` — тестовые файлы для эмулятора (`sample-en.txt`,
+  `paper-texture.png`).
+  - `ui/theme/Theme.kt` — тема Material 3.
+
+## Соглашения
+
+- Основной язык документации, комментариев и сообщений — **русский**.
+- Придерживаться требований из `README.md` и плана из `ROADMAP.md`;
+  не выдумывать функциональность, которой там нет.
+- При изменении стека, команд сборки или структуры кода — обновлять этот файл.
+- Все форматы книг приводятся к единому внутреннему представлению
+  (книга → главы → абзацы → слова); читалка и перевод не зависят от формата.
+- Git-репозиторий, основная ветка — `master`. Коммиты и сообщения коммитов — на русском.
