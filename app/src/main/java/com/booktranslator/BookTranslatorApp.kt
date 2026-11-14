@@ -2,6 +2,7 @@ package com.booktranslator
 
 import android.app.Application
 import com.booktranslator.data.db.AppDatabase
+import com.tom_roush.pdfbox.android.PDFBoxResourceLoader
 import com.booktranslator.translate.CachingTranslator
 import com.booktranslator.translate.OnnxTranslator
 import com.booktranslator.translate.Translator
@@ -21,6 +22,8 @@ class BookTranslatorApp : Application() {
 
     override fun onCreate() {
         super.onCreate()
+        // Инициализация PDFBox для разбора PDF (используется в parse/PdfParser)
+        PDFBoxResourceLoader.init(applicationContext)
         val onnxTranslator = OnnxTranslator(this)
         translator = CachingTranslator(
             AppDatabase.get(this).translationDao(),

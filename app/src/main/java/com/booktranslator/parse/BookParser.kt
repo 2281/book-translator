@@ -5,12 +5,18 @@ import java.io.File
 
 /**
  * Разбор файлов книг в единое представление [BookContent].
- * Этап 1: только txt. fb2/epub/pdf добавляются на этапе 4.
+ * Поддерживаемые форматы: txt, fb2, epub, pdf (с текстовым слоем).
  */
 object BookParser {
 
+    /** Расширения файлов, которые умеем импортировать. */
+    val SUPPORTED_FORMATS = setOf("txt", "fb2", "epub", "pdf")
+
     fun parse(file: File, format: String): BookContent = when (format.lowercase()) {
         "txt" -> parseTxt(file)
+        "fb2" -> Fb2Parser.parse(file)
+        "epub" -> EpubParser.parse(file)
+        "pdf" -> PdfParser.parse(file)
         else -> throw UnsupportedFormatException(format)
     }
 
@@ -26,4 +32,4 @@ object BookParser {
 }
 
 class UnsupportedFormatException(format: String) :
-    Exception("Формат пока не поддерживается: $format")
+    Exception("Формат не поддерживается: $format. Доступны: txt, fb2, epub, pdf")

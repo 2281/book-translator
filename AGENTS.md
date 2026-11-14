@@ -17,6 +17,9 @@ ONNX Runtime.
 - **Сборка:** Gradle 8.10.2 (wrapper), Android Gradle Plugin 8.7.x,
   compileSdk/targetSdk 35, minSdk 24.
 - **Хранение:** Room (каталог книг, кэш переводов), DataStore (настройки).
+- **Форматы книг:** txt, fb2, epub — свои парсеры без зависимостей;
+  pdf (с текстовым слоем) — `com.tom-roush:pdfbox-android:2.0.27.0`
+  (init в `BookTranslatorApp.onCreate`).
 - **Перевод:** ONNX Runtime (`com.microsoft.onnxruntime:onnxruntime-android:1.20.0`),
   токенизация SentencePiece как custom ops из
   `onnxruntime-extensions-android:0.13.0` (класс `OrtxPackage`).
@@ -51,7 +54,10 @@ ONNX Runtime.
 - `app/` — единственный модуль приложения, пакет `com.booktranslator`.
   - `MainActivity.kt` — точка входа, навигация (каталог ↔ чтение).
   - `model/BookContent.kt` — единое представление книги (абзацы).
-  - `parse/BookParser.kt` — разбор файлов в `BookContent` (пока txt).
+  - `parse/` — разбор файлов в `BookContent`: `BookParser` (диспетчер,
+    txt + список поддерживаемых форматов), `Fb2Parser` (XmlPullParser),
+    `EpubParser` (ZIP + OPF/spine + XHTML), `PdfParser` (PDFBox-Android,
+    текстовый слой).
   - `data/db/` — Room: `BookEntity`, `BookDao`, `AppDatabase`.
   - `data/BookRepository.kt` — импорт файлов, позиция чтения, удаление.
   - `data/settings/` — настройки чтения (`ReaderSettings`, `SettingsRepository`

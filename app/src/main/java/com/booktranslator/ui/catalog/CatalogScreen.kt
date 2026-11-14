@@ -66,7 +66,7 @@ fun CatalogScreen(onOpenBook: (Long) -> Unit) {
         topBar = { TopAppBar(title = { Text("Каталог книг") }) },
         snackbarHost = { SnackbarHost(snackbarHostState) },
         floatingActionButton = {
-            FloatingActionButton(onClick = { picker.launch(arrayOf("text/plain")) }) {
+            FloatingActionButton(onClick = { picker.launch(arrayOf("*/*")) }) {
                 Icon(Icons.Default.Add, contentDescription = "Добавить книгу")
             }
         }
@@ -79,7 +79,7 @@ fun CatalogScreen(onOpenBook: (Long) -> Unit) {
                 contentAlignment = Alignment.Center
             ) {
                 Text(
-                    text = "Каталог пуст.\nНажмите +, чтобы добавить книгу (txt).",
+                    text = "Каталог пуст.\nНажмите +, чтобы добавить книгу (txt, fb2, epub, pdf).",
                     textAlign = TextAlign.Center,
                     style = MaterialTheme.typography.bodyLarge
                 )

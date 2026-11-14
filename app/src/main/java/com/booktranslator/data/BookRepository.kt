@@ -5,6 +5,7 @@ import android.net.Uri
 import android.provider.OpenableColumns
 import com.booktranslator.data.db.BookDao
 import com.booktranslator.data.db.BookEntity
+import com.booktranslator.parse.BookParser
 import com.booktranslator.parse.UnsupportedFormatException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
@@ -24,7 +25,7 @@ class BookRepository(
         runCatching {
             val displayName = queryDisplayName(uri) ?: "book.txt"
             val format = displayName.substringAfterLast('.', "").lowercase()
-            if (format != "txt") throw UnsupportedFormatException(format)
+            if (format !in BookParser.SUPPORTED_FORMATS) throw UnsupportedFormatException(format)
 
             val dir = File(context.filesDir, "books").apply { mkdirs() }
             val file = File(dir, "${System.currentTimeMillis()}-$displayName")

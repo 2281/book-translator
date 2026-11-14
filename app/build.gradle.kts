@@ -13,8 +13,8 @@ android {
         applicationId = "com.booktranslator"
         minSdk = 24
         targetSdk = 35
-        versionCode = 2
-        versionName = "0.1.1"
+        versionCode = 3
+        versionName = "0.2.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
@@ -94,6 +94,9 @@ dependencies {
     // Оффлайн-перевод: ONNX Runtime + расширения (SentencePiece-токенизатор)
     implementation("com.microsoft.onnxruntime:onnxruntime-android:1.20.0")
     implementation("com.microsoft.onnxruntime:onnxruntime-extensions-android:0.13.0")
+
+    // Читаемые PDF (извлечение текстового слоя)
+    implementation("com.tom-roush:pdfbox-android:2.0.27.0")
 
     testImplementation("junit:junit:4.13.2")
     androidTestImplementation("androidx.test.ext:junit:1.2.1")
