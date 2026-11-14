@@ -17,7 +17,8 @@ import java.nio.LongBuffer
  * Оффлайн-переводчик en -> ru на ONNX-модели Helsinki-NLP opus-mt-en-ru.
  *
  * Конвейер: tok-encode.onnx (SentencePiece + remap в нумерацию модели) ->
- * encoder_model.onnx -> decoder_model.onnx (жадное декодирование) ->
+ * encoder_model.onnx -> decoder_model.onnx (шаг 0, выдаёт KV-кэш) ->
+ * decoder_with_past_model.onnx (шаги 1..N, один токен за прогон, KV-кэш) ->
  * tok-decode.onnx. Токенизаторы работают через onnxruntime-extensions.
  *
  * Модели лежат в assets/model/ и при первом запуске копируются во внутреннее
@@ -33,6 +34,7 @@ class OnnxTranslator(private val context: Context) : Translator {
     private lateinit var tokDecode: OrtSession
     private lateinit var encoder: OrtSession
     private lateinit var decoder: OrtSession
+    private lateinit var decoderPast: OrtSession
 
     /** Загрузить модель в память заранее (вызывается при старте приложения). */
     suspend fun warmUp() = ensureInitialized()
@@ -47,15 +49,21 @@ class OnnxTranslator(private val context: Context) : Translator {
                     registerCustomOpLibrary(OrtxPackage.getLibraryPath())
                 }
                 val modelOptions = OrtSession.SessionOptions().apply {
-                    setIntraOpNumThreads(2)
-                    // NNAPI: по возможности исполняет граф на GPU/DSP,
-                    // неподдерживаемые операции остаются на CPU
-                    runCatching { addNnapi() }
+                    setIntraOpNumThreads(INTRA_OP_THREADS)
+                    if (USE_NNAPI) {
+                        // NNAPI (GPU/DSP) — выключен по умолчанию: на устройствах
+                        // без вендорских драйверов ops падают на nnapi-reference,
+                        // который медленнее CPU-ядер ORT
+                        runCatching { addNnapi() }
+                    }
                 }
                 tokEncode = env.createSession(assetFile("tok-encode.onnx"), extOptions)
                 tokDecode = env.createSession(assetFile("tok-decode.onnx"), extOptions)
                 encoder = env.createSession(assetFile("encoder_model.onnx"), modelOptions)
                 decoder = env.createSession(assetFile("decoder_model.onnx"), modelOptions)
+                decoderPast = env.createSession(
+                    assetFile("decoder_with_past_model.onnx"), modelOptions
+                )
                 initialized = true
             }
         }
@@ -101,36 +109,72 @@ class OnnxTranslator(private val context: Context) : Translator {
         // encResult.close() в finally закрывает и этот тензор
         val encHidden = encResult.get(0) as OnnxTensor
 
+        // Тензоры, которые нужно закрыть в конце (кросс-KV живут до конца генерации)
+        val ownedTensors = mutableListOf<OnnxTensor>()
+
         try {
-            // Жадное декодирование
-            val output = mutableListOf<Long>()
-            var decIds = longArrayOf(PAD_ID)
-            var finished = false
-            var steps = 0
-            while (steps < MAX_DECODE_STEPS && !finished) {
-                steps++
-                val decIdsTensor = longTensor(decIds)
-                try {
-                    decoder.run(
-                        mapOf(
-                            "input_ids" to decIdsTensor,
-                            "encoder_hidden_states" to encHidden,
-                            "encoder_attention_mask" to maskTensor
-                        ),
-                        setOf("logits")
-                    ).use { decResult ->
-                        val logitsTensor = decResult.get("logits").get() as OnnxTensor
-                        val next = argmaxLastToken(logitsTensor, decIds.size)
-                        if (next == EOS_ID) {
-                            finished = true
-                        } else {
-                            output.add(next)
-                            decIds = decIds + next
-                        }
-                    }
-                } finally {
-                    decIdsTensor.close()
+            // Шаг 0: полный декодер без кэша -> логиты + present.* (включая
+            // кросс-KV энкодера, которые дальше не пересчитываются)
+            val padTensor = longTensor(longArrayOf(PAD_ID))
+            val step0 = decoder.run(
+                mapOf(
+                    "input_ids" to padTensor,
+                    "encoder_hidden_states" to encHidden,
+                    "encoder_attention_mask" to maskTensor
+                )
+            )
+            padTensor.close()
+
+            var logitsTensor = step0.get("logits").get() as OnnxTensor
+            var past = mutableMapOf<String, OnnxTensor>()
+            step0.forEach { entry ->
+                if (entry.key.startsWith("present.")) {
+                    past["past_key_values." + entry.key.substringAfter('.')] =
+                        entry.value as OnnxTensor
                 }
+            }
+            ownedTensors.addAll(past.values)
+            ownedTensors.add(logitsTensor)
+
+            // Шаги 1..N: декодер с KV-кэшем, один токен за прогон
+            val output = mutableListOf<Long>()
+            var next = argmaxLastToken(logitsTensor, 1)
+            while (next != EOS_ID && output.size < MAX_DECODE_STEPS) {
+                output.add(next)
+                val nextTensor = longTensor(longArrayOf(next))
+                val inputs = HashMap<String, OnnxTensor>(past.size + 2)
+                inputs["input_ids"] = nextTensor
+                inputs["encoder_attention_mask"] = maskTensor
+                inputs.putAll(past)
+
+                val stepResult = decoderPast.run(inputs)
+                nextTensor.close()
+
+                val newLogits = stepResult.get("logits").get() as OnnxTensor
+                // Новый self-attention кэш; кросс-KV (encoder) остаются с шага 0
+                val staleDecoderTensors = mutableListOf<OnnxTensor>()
+                val newPast = mutableMapOf<String, OnnxTensor>()
+                stepResult.forEach { entry ->
+                    if (entry.key.startsWith("present.")) {
+                        newPast["past_key_values." + entry.key.substringAfter('.')] =
+                            entry.value as OnnxTensor
+                    }
+                }
+                past.forEach { (name, tensor) ->
+                    if (name.contains(".decoder.")) staleDecoderTensors.add(tensor)
+                }
+                past = past
+                    .filterKeys { it.contains(".encoder.") }
+                    .toMutableMap()
+                    .apply { putAll(newPast) }
+                ownedTensors.addAll(newPast.values)
+                ownedTensors.add(newLogits)
+                staleDecoderTensors.forEach { it.close() }
+                logitsTensor.close()
+
+                logitsTensor = newLogits
+                next = argmaxLastToken(logitsTensor, 1)
+                // stepResult не закрываем: его тензоры (logits + present) живут в past/owned
             }
 
             // Детокенизация: id модели -> строка
@@ -141,6 +185,7 @@ class OnnxTranslator(private val context: Context) : Translator {
                 }
             }
         } finally {
+            ownedTensors.forEach { runCatching { it.close() } }
             encResult.close()
             inputIdsTensor.close()
             maskTensor.close()
@@ -178,5 +223,7 @@ class OnnxTranslator(private val context: Context) : Translator {
         const val PAD_ID = 62517L   // decoder_start_token_id модели
         const val EOS_ID = 0L
         const val MAX_DECODE_STEPS = 40
+        const val INTRA_OP_THREADS = 4
+        const val USE_NNAPI = false
     }
 }

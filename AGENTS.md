@@ -20,12 +20,18 @@ ONNX Runtime.
 - **Перевод:** ONNX Runtime (`com.microsoft.onnxruntime:onnxruntime-android:1.20.0`),
   токенизация SentencePiece как custom ops из
   `onnxruntime-extensions-android:0.13.0` (класс `OrtxPackage`).
-  Модель: Helsinki-NLP `opus-mt-en-ru` → ONNX (encoder + decoder, int8).
+  Модель: Helsinki-NLP `opus-mt-en-ru` → ONNX (encoder + decoder +
+  decoder_with_past, int8). Декодирование с KV-кэшем: шаг 0 через
+  `decoder_model.onnx` (выдаёт present.*, включая кросс-KV энкодера),
+  далее по одному токену через `decoder_with_past_model.onnx`.
   ВАЖНО: у opus-mt нумерация id в vocab.json отличается от нумерации внутри
   .spm — токенизаторные графы содержат remap-таблицы (см. `tools/`).
 - **Жизненный цикл модели:** переводчик — синглтон в `BookTranslatorApp`,
   веса прогреваются в фоне при старте приложения и живут, пока жив процесс.
-  Инференс через NNAPI (GPU/DSP при наличии), остальное — на CPU.
+  Инференс на CPU (4 потока). NNAPI сознательно отключён
+  (`USE_NNAPI = false` в `OnnxTranslator`): на устройствах без вендорских
+  NNAPI-драйверов ops падают на nnapi-reference, который медленнее
+  CPU-ядер ONNX Runtime.
 - **Android SDK:** `~/Android/Sdk` (platform android-35, build-tools 34.0.0).
 
 ## Сборка и тестирование
@@ -51,17 +57,19 @@ ONNX Runtime.
   - `data/settings/` — настройки чтения (`ReaderSettings`, `SettingsRepository`
     на DataStore): шрифт, размер, цвета, фоновое изображение.
   - `translate/` — перевод: интерфейс `Translator`, `OnnxTranslator`
-    (инференс ONNX: tok-encode → encoder → жадный декодер → tok-decode),
-    `CachingTranslator` (кэш в Room).
+    (инференс ONNX: tok-encode → encoder → жадный декодер с KV-кэшем →
+    tok-decode), `CachingTranslator` (кэш в Room).
   - `model/WordSpan.kt` — разбиение текста на кликабельные слова.
   - `ui/catalog/` — экран каталога (список, добавление, удаление книг).
   - `ui/reader/` — экран чтения (прокрутка, сохранение позиции,
     панель настроек `ReaderSettingsSheet`, кликабельные слова с заменой
     переводом, плашка с переводом).
-  - `app/src/main/assets/model/` — int8 ONNX-модели encoder/decoder +
-    токенизаторные графы tok-encode/tok-decode (всего ~140 МБ).
+  - `app/src/main/assets/model/` — int8 ONNX-модели encoder/decoder/
+    decoder_with_past + токенизаторные графы tok-encode/tok-decode
+    (всего ~220 МБ).
 - `tools/` — инструменты конвертации модели (venv, скрипты
-  `build_tokenizers.py`, `test_translate.py`, исходные файлы HF в `tools/hf/`).
+  `build_tokenizers.py`, `test_translate.py`, `test_translate_past.py`,
+  исходные файлы HF в `tools/hf/`).
   Не нужны для сборки приложения.
 - `samples/` — тестовые файлы для эмулятора (`sample-en.txt`,
   `paper-texture.png`).

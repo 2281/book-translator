@@ -9,3 +9,4 @@ tools/.venv/
 tools/onnx-fp32/
 tools/onnx-int8/
 .kotlin/
+*.apk
