@@ -34,14 +34,6 @@ sealed interface ReaderState {
     data class Error(val message: String) : ReaderState
 }
 
-/** Состояние последнего перевода для показа в нижней плашке. */
-data class TranslationUi(
-    val word: String,
-    val translation: String?,
-    val loading: Boolean,
-    val error: Boolean = false
-)
-
 class ReaderViewModel(
     private val repository: BookRepository,
     private val settingsRepository: SettingsRepository,
@@ -59,9 +51,6 @@ class ReaderViewModel(
     /** Переведённые фрагменты: ключ "индексАбзаца:начало:конец" → перевод. */
     private val _translations = MutableStateFlow<Map<String, SpanTranslation>>(emptyMap())
     val translations: StateFlow<Map<String, SpanTranslation>> = _translations.asStateFlow()
-
-    private val _currentTranslation = MutableStateFlow<TranslationUi?>(null)
-    val currentTranslation: StateFlow<TranslationUi?> = _currentTranslation.asStateFlow()
 
     init {
         viewModelScope.launch(Dispatchers.IO) {
@@ -98,7 +87,6 @@ class ReaderViewModel(
             }?.key
         if (existingKey != null) {
             _translations.value = _translations.value - existingKey
-            _currentTranslation.value = null
             return
         }
 
@@ -115,13 +103,11 @@ class ReaderViewModel(
                 translation = idiom.translation,
                 fromIdiom = true
             ))
-            _currentTranslation.value = TranslationUi(idiom.phrase, idiom.translation, loading = false)
             return
         }
 
         // Обычное слово — перевод моделью
         viewModelScope.launch {
-            _currentTranslation.value = TranslationUi(span.word, null, loading = true)
             try {
                 val translation = translator.translate(span.word)
                 val key = "$paragraphIndex:${span.start}:${span.end}"
@@ -132,17 +118,10 @@ class ReaderViewModel(
                     translation = translation,
                     fromIdiom = false
                 ))
-                _currentTranslation.value = TranslationUi(span.word, translation, loading = false)
             } catch (e: Exception) {
-                _currentTranslation.value = TranslationUi(
-                    span.word, null, loading = false, error = true
-                )
+                // Ошибка перевода — просто не добавляем подстрочник
             }
         }
-    }
-
-    fun dismissTranslation() {
-        _currentTranslation.value = null
     }
 
     fun savePosition(index: Int, offset: Int) {

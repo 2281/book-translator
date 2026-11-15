@@ -5,20 +5,14 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.PaddingValues
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -26,7 +20,6 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
@@ -62,7 +55,6 @@ fun ReaderScreen(bookId: Long, onBack: () -> Unit) {
     val state by viewModel.state.collectAsState()
     val settings by viewModel.settings.collectAsState()
     val translations by viewModel.translations.collectAsState()
-    val currentTranslation by viewModel.currentTranslation.collectAsState()
     var showSettings by remember { mutableStateOf(false) }
 
     Scaffold(
@@ -108,17 +100,6 @@ fun ReaderScreen(bookId: Long, onBack: () -> Unit) {
                     onPositionChanged = viewModel::savePosition
                 )
             }
-
-            // Плашка с переводом последнего нажатого слова
-            currentTranslation?.let { translation ->
-                TranslationBanner(
-                    translation = translation,
-                    modifier = Modifier
-                        .align(Alignment.BottomCenter)
-                        .padding(16.dp),
-                    onDismiss = viewModel::dismissTranslation
-                )
-            }
         }
     }
 
@@ -133,38 +114,6 @@ fun ReaderScreen(bookId: Long, onBack: () -> Unit) {
             onBackgroundImage = viewModel::setBackgroundImage,
             onClearBackgroundImage = viewModel::clearBackgroundImage
         )
-    }
-}
-
-@Composable
-private fun TranslationBanner(
-    translation: TranslationUi,
-    modifier: Modifier = Modifier,
-    onDismiss: () -> Unit
-) {
-    Surface(
-        modifier = modifier,
-        shape = RoundedCornerShape(12.dp),
-        tonalElevation = 4.dp,
-        shadowElevation = 4.dp
-    ) {
-        Row(
-            modifier = Modifier.padding(start = 16.dp, top = 10.dp, bottom = 10.dp, end = 4.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            when {
-                translation.loading -> {
-                    CircularProgressIndicator(modifier = Modifier.size(18.dp))
-                    Spacer(modifier = Modifier.width(10.dp))
-                    Text("${translation.word} — переводим…")
-                }
-                translation.error -> Text("${translation.word} — ошибка перевода")
-                else -> Text("${translation.word} → ${translation.translation}")
-            }
-            IconButton(onClick = onDismiss) {
-                Icon(Icons.Default.Close, contentDescription = "Скрыть")
-            }
-        }
     }
 }
 
