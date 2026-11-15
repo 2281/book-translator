@@ -13,7 +13,9 @@ import com.booktranslator.data.settings.AppFontFamily
 import com.booktranslator.data.settings.ReaderSettings
 import com.booktranslator.data.settings.SettingsRepository
 import com.booktranslator.model.BookContent
+import com.booktranslator.model.IdiomDictionary
 import com.booktranslator.model.WordSpan
+import com.booktranslator.model.WordSplitter
 import com.booktranslator.BookTranslatorApp
 import com.booktranslator.parse.BookParser
 import com.booktranslator.translate.Translator
@@ -44,6 +46,7 @@ class ReaderViewModel(
     private val repository: BookRepository,
     private val settingsRepository: SettingsRepository,
     private val translator: Translator,
+    private val idiomDictionary: IdiomDictionary,
     private val bookId: Long
 ) : ViewModel() {
 
@@ -53,9 +56,9 @@ class ReaderViewModel(
     val settings: StateFlow<ReaderSettings> = settingsRepository.settings
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), ReaderSettings())
 
-    /** Заменённые слова: ключ "индексАбзаца:позицияСлова" -> перевод. */
-    private val _translations = MutableStateFlow<Map<String, String>>(emptyMap())
-    val translations: StateFlow<Map<String, String>> = _translations.asStateFlow()
+    /** Переведённые фрагменты: ключ "индексАбзаца:начало:конец" → перевод. */
+    private val _translations = MutableStateFlow<Map<String, SpanTranslation>>(emptyMap())
+    val translations: StateFlow<Map<String, SpanTranslation>> = _translations.asStateFlow()
 
     private val _currentTranslation = MutableStateFlow<TranslationUi?>(null)
     val currentTranslation: StateFlow<TranslationUi?> = _currentTranslation.asStateFlow()
@@ -77,21 +80,58 @@ class ReaderViewModel(
     }
 
     /**
-     * Тап по слову: если слово уже переведено — вернуть оригинал,
-     * иначе перевести и заменить слово в тексте.
+     * Тап по слову:
+     * - тап внутри уже переведённого фрагмента — убирает перевод;
+     * - слово входит в устойчивое выражение из словаря идиом — переводится
+     *   вся фраза (без вызова модели, перевод из словаря);
+     * - иначе — одиночное слово переводится моделью.
+     * Перевод показывается под словом/фразой, английский текст не меняется.
      */
     fun onWordTapped(paragraphIndex: Int, span: WordSpan) {
-        val key = "$paragraphIndex:${span.start}"
-        if (_translations.value.containsKey(key)) {
-            _translations.value = _translations.value - key
+        val ready = _state.value as? ReaderState.Ready ?: return
+        val paragraph = ready.content.paragraphs.getOrNull(paragraphIndex) ?: return
+
+        // Тап внутри уже переведённого фрагмента — снять перевод
+        val existingKey = _translations.value.entries
+            .firstOrNull { (key, tr) ->
+                key.startsWith("$paragraphIndex:") && span.start >= tr.start && span.start < tr.end
+            }?.key
+        if (existingKey != null) {
+            _translations.value = _translations.value - existingKey
             _currentTranslation.value = null
             return
         }
+
+        // Проверяем устойчивое выражение (идиому) вокруг тапнутого слова
+        val spans = WordSplitter.split(paragraph)
+        val tappedIndex = spans.indexOfFirst { it.start == span.start }
+        val idiom = idiomDictionary.find(paragraph, spans, tappedIndex)
+        if (idiom != null) {
+            val key = "$paragraphIndex:${idiom.start}:${idiom.end}"
+            _translations.value = _translations.value + (key to SpanTranslation(
+                start = idiom.start,
+                end = idiom.end,
+                original = idiom.phrase,
+                translation = idiom.translation,
+                fromIdiom = true
+            ))
+            _currentTranslation.value = TranslationUi(idiom.phrase, idiom.translation, loading = false)
+            return
+        }
+
+        // Обычное слово — перевод моделью
         viewModelScope.launch {
             _currentTranslation.value = TranslationUi(span.word, null, loading = true)
             try {
                 val translation = translator.translate(span.word)
-                _translations.value = _translations.value + (key to translation)
+                val key = "$paragraphIndex:${span.start}:${span.end}"
+                _translations.value = _translations.value + (key to SpanTranslation(
+                    start = span.start,
+                    end = span.end,
+                    original = span.word,
+                    translation = translation,
+                    fromIdiom = false
+                ))
                 _currentTranslation.value = TranslationUi(span.word, translation, loading = false)
             } catch (e: Exception) {
                 _currentTranslation.value = TranslationUi(
@@ -141,6 +181,7 @@ class ReaderViewModel(
                     BookRepository(AppDatabase.get(app).bookDao(), app),
                     SettingsRepository(app),
                     app.translator,
+                    IdiomDictionary(app),
                     bookId
                 )
             }

@@ -66,10 +66,13 @@ ONNX Runtime.
     (инференс ONNX: tok-encode → encoder → жадный декодер с KV-кэшем →
     tok-decode), `CachingTranslator` (кэш в Room).
   - `model/WordSpan.kt` — разбиение текста на кликабельные слова.
+  - `model/IdiomDictionary.kt` — словарь устойчивых выражений
+    (`assets/idioms.json`), поиск самого длинного совпадения при тапе.
   - `ui/catalog/` — экран каталога (список, добавление, удаление книг).
   - `ui/reader/` — экран чтения (прокрутка, сохранение позиции,
-    панель настроек `ReaderSettingsSheet`, кликабельные слова с заменой
-    переводом, плашка с переводом).
+    панель настроек `ReaderSettingsSheet`, `InterlinearParagraph` —
+    собственная раскладка абзаца: кликабельные слова, подстрочный перевод
+    под словом/фразой, плашка с переводом).
   - `app/src/main/assets/model/` — int8 ONNX-модели encoder/decoder/
     decoder_with_past + токенизаторные графы tok-encode/tok-decode
     (всего ~220 МБ).

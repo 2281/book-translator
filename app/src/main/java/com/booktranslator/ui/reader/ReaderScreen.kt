@@ -3,8 +3,6 @@ package com.booktranslator.ui.reader
 import android.graphics.BitmapFactory
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -42,25 +40,16 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
-import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.text.AnnotatedString
-import androidx.compose.ui.text.SpanStyle
-import androidx.compose.ui.text.TextLayoutResult
-import androidx.compose.ui.text.TextStyle
-import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.booktranslator.data.settings.AppFontFamily
 import com.booktranslator.data.settings.ReaderSettings
 import com.booktranslator.model.WordSpan
-import com.booktranslator.model.WordSplitter
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -183,7 +172,7 @@ private fun TranslationBanner(
 private fun ReaderContent(
     state: ReaderState.Ready,
     settings: ReaderSettings,
-    translations: Map<String, String>,
+    translations: Map<String, SpanTranslation>,
     onWordTapped: (Int, WordSpan) -> Unit,
     onPositionChanged: (Int, Int) -> Unit
 ) {
@@ -241,76 +230,18 @@ private fun ReaderContent(
             contentPadding = PaddingValues(horizontal = 20.dp, vertical = 16.dp)
         ) {
             itemsIndexed(state.content.paragraphs) { paragraphIndex, paragraph ->
-                ClickableParagraph(
+                val paragraphTranslations = translations.entries
+                    .filter { it.key.startsWith("$paragraphIndex:") }
+                    .map { it.value }
+                InterlinearParagraph(
                     paragraph = paragraph,
                     paragraphIndex = paragraphIndex,
-                    translations = translations,
+                    translations = paragraphTranslations,
                     style = textStyle,
-                    translatedColor = translatedColor,
+                    accentColor = translatedColor,
                     onWordTapped = onWordTapped
                 )
             }
         }
     }
-}
-
-/**
- * Абзац с кликабельными словами. Переведённые слова подменяются переводом
- * и выделяются; повторный тап возвращает оригинал.
- */
-@Composable
-private fun ClickableParagraph(
-    paragraph: String,
-    paragraphIndex: Int,
-    translations: Map<String, String>,
-    style: TextStyle,
-    translatedColor: Color,
-    onWordTapped: (Int, WordSpan) -> Unit
-) {
-    val spans = remember(paragraph) { WordSplitter.split(paragraph) }
-
-    // Отображаемый текст + соответствие позиций в нём исходным словам
-    val (annotated, displaySpans) = remember(paragraph, translations, paragraphIndex) {
-        var last = 0
-        val segs = mutableListOf<Pair<IntRange, WordSpan>>()
-        val text = buildAnnotatedString {
-            spans.forEach { span ->
-                if (span.start > last) append(paragraph.substring(last, span.start))
-                val translation = translations["$paragraphIndex:${span.start}"]
-                val display = translation ?: span.word
-                val displayStart = length
-                if (translation != null) {
-                    withStyle(SpanStyle(fontWeight = FontWeight.Bold, color = translatedColor)) {
-                        append(display)
-                    }
-                } else {
-                    append(display)
-                }
-                segs.add((displayStart until displayStart + display.length) to span)
-                last = span.end
-            }
-            if (last < paragraph.length) append(paragraph.substring(last))
-        }
-        text to segs
-    }
-
-    var layoutResult by remember { mutableStateOf<TextLayoutResult?>(null) }
-
-    Text(
-        text = annotated,
-        onTextLayout = { layoutResult = it },
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(bottom = 12.dp)
-            .pointerInput(annotated) {
-                detectTapGestures { tapOffset ->
-                    val layout = layoutResult ?: return@detectTapGestures
-                    val position = layout.getOffsetForPosition(tapOffset)
-                    displaySpans
-                        .firstOrNull { position in it.first }
-                        ?.let { onWordTapped(paragraphIndex, it.second) }
-                }
-            },
-        style = style
-    )
 }
