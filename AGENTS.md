@@ -53,7 +53,8 @@ ONNX Runtime.
 
 - `app/` — единственный модуль приложения, пакет `com.booktranslator`.
   - `MainActivity.kt` — точка входа, навигация (каталог ↔ чтение).
-  - `model/BookContent.kt` — единое представление книги (абзацы).
+  - `model/BookContent.kt` — единое представление книги (главы `Chapter` +
+    абзацы).
   - `parse/` — разбор файлов в `BookContent`: `BookParser` (диспетчер,
     txt + список поддерживаемых форматов), `Fb2Parser` (XmlPullParser),
     `EpubParser` (ZIP + OPF/spine + XHTML), `PdfParser` (PDFBox-Android,
@@ -70,9 +71,9 @@ ONNX Runtime.
     (`assets/idioms.json`), поиск самого длинного совпадения при тапе.
   - `ui/catalog/` — экран каталога (список, добавление, удаление книг).
   - `ui/reader/` — экран чтения (прокрутка, сохранение позиции,
-    панель настроек `ReaderSettingsSheet`, `InterlinearParagraph` —
-    собственная раскладка абзаца: кликабельные слова, подстрочный перевод
-    под словом/фразой, плашка с переводом).
+    панель настроек `ReaderSettingsSheet`, оглавление с переходом к главе,
+    `InterlinearParagraph` — собственная раскладка абзаца: кликабельные
+    слова, подстрочный перевод под словом/фразой).
   - `app/src/main/assets/model/` — int8 ONNX-модели encoder/decoder/
     decoder_with_past + токенизаторные графы tok-encode/tok-decode
     (всего ~220 МБ).

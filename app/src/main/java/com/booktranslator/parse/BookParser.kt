@@ -1,6 +1,7 @@
 package com.booktranslator.parse
 
 import com.booktranslator.model.BookContent
+import com.booktranslator.model.Chapter
 import java.io.File
 
 /**
@@ -27,8 +28,23 @@ object BookParser {
             .split(Regex("\n\\s*\n"))
             .map { it.replace('\n', ' ').trim() }
             .filter { it.isNotEmpty() }
-        return BookContent(title = file.nameWithoutExtension, paragraphs = paragraphs)
+        // Главы в txt размечаются эвристикой: «Глава 1», «Chapter 2», «Пролог» и т.п.
+        val chapters = paragraphs.mapIndexedNotNull { index, p ->
+            if (p.length < 100 && CHAPTER_HEADING.containsMatchIn(p)) {
+                Chapter(title = p, paragraphIndex = index)
+            } else null
+        }
+        return BookContent(
+            title = file.nameWithoutExtension,
+            paragraphs = paragraphs,
+            chapters = chapters
+        )
     }
+
+    private val CHAPTER_HEADING = Regex(
+        "^(chapter|глава|part|часть|пролог|эпилог|prologue|epilogue|введение|introduction)\\b",
+        RegexOption.IGNORE_CASE
+    )
 }
 
 class UnsupportedFormatException(format: String) :

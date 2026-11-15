@@ -3,6 +3,7 @@ package com.booktranslator.ui.reader
 import android.graphics.BitmapFactory
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
@@ -13,12 +14,14 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
@@ -28,6 +31,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -43,6 +47,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.booktranslator.data.settings.AppFontFamily
 import com.booktranslator.data.settings.ReaderSettings
 import com.booktranslator.model.WordSpan
+import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -56,6 +61,8 @@ fun ReaderScreen(bookId: Long, onBack: () -> Unit) {
     val settings by viewModel.settings.collectAsState()
     val translations by viewModel.translations.collectAsState()
     var showSettings by remember { mutableStateOf(false) }
+    var showContents by remember { mutableStateOf(false) }
+    val chapters = (state as? ReaderState.Ready)?.content?.chapters.orEmpty()
 
     Scaffold(
         topBar = {
@@ -72,6 +79,14 @@ fun ReaderScreen(bookId: Long, onBack: () -> Unit) {
                     }
                 },
                 actions = {
+                    if (chapters.isNotEmpty()) {
+                        IconButton(onClick = { showContents = true }) {
+                            Icon(
+                                Icons.AutoMirrored.Filled.List,
+                                contentDescription = "Оглавление"
+                            )
+                        }
+                    }
                     IconButton(onClick = { showSettings = true }) {
                         Icon(Icons.Default.Settings, contentDescription = "Настройки отображения")
                     }
@@ -96,6 +111,8 @@ fun ReaderScreen(bookId: Long, onBack: () -> Unit) {
                     state = current,
                     settings = settings,
                     translations = translations,
+                    showContents = showContents,
+                    onDismissContents = { showContents = false },
                     onWordTapped = viewModel::onWordTapped,
                     onPositionChanged = viewModel::savePosition
                 )
@@ -117,11 +134,14 @@ fun ReaderScreen(bookId: Long, onBack: () -> Unit) {
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun ReaderContent(
     state: ReaderState.Ready,
     settings: ReaderSettings,
     translations: Map<String, SpanTranslation>,
+    showContents: Boolean,
+    onDismissContents: () -> Unit,
     onWordTapped: (Int, WordSpan) -> Unit,
     onPositionChanged: (Int, Int) -> Unit
 ) {
@@ -129,6 +149,7 @@ private fun ReaderContent(
         initialFirstVisibleItemIndex = state.book.scrollIndex,
         initialFirstVisibleItemScrollOffset = state.book.scrollOffset
     )
+    val scope = rememberCoroutineScope()
 
     // Сохраняем позицию чтения при выходе с экрана
     DisposableEffect(Unit) {
@@ -190,6 +211,36 @@ private fun ReaderContent(
                     accentColor = translatedColor,
                     onWordTapped = onWordTapped
                 )
+            }
+        }
+    }
+
+    // Оглавление: шторка со списком глав, тап — переход к главе
+    if (showContents) {
+        ModalBottomSheet(onDismissRequest = onDismissContents) {
+            Text(
+                text = "Оглавление",
+                style = MaterialTheme.typography.titleMedium,
+                modifier = Modifier.padding(horizontal = 24.dp, vertical = 8.dp)
+            )
+            LazyColumn(
+                contentPadding = PaddingValues(bottom = 32.dp)
+            ) {
+                itemsIndexed(state.content.chapters) { _, chapter ->
+                    Text(
+                        text = chapter.title,
+                        style = MaterialTheme.typography.bodyLarge,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable {
+                                scope.launch {
+                                    listState.scrollToItem(chapter.paragraphIndex)
+                                }
+                                onDismissContents()
+                            }
+                            .padding(horizontal = 24.dp, vertical = 14.dp)
+                    )
+                }
             }
         }
     }

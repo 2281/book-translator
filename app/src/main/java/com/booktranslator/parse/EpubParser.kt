@@ -2,6 +2,7 @@ package com.booktranslator.parse
 
 import android.util.Xml
 import com.booktranslator.model.BookContent
+import com.booktranslator.model.Chapter
 import org.xmlpull.v1.XmlPullParser
 import java.io.File
 import java.io.InputStream
@@ -26,18 +27,28 @@ object EpubParser {
             val opfDir = opfPath.substringBeforeLast('/', "")
 
             val paragraphs = mutableListOf<String>()
+            val chapters = mutableListOf<Chapter>()
             for (idRef in opf.spine) {
                 val href = opf.manifest[idRef] ?: continue
                 val path = if (opfDir.isEmpty()) href else "$opfDir/$href"
                 val entry = zip.getEntry(path.normalizeZipPath()) ?: continue
-                zip.getInputStream(entry).use { input ->
+                // Каждый документ spine — глава; название — первый заголовок в нём
+                val chapterStart = paragraphs.size
+                val heading = zip.getInputStream(entry).use { input ->
                     extractParagraphs(input, paragraphs)
+                }
+                if (paragraphs.size > chapterStart) {
+                    chapters += Chapter(
+                        title = heading ?: "Глава ${chapters.size + 1}",
+                        paragraphIndex = chapterStart
+                    )
                 }
             }
             require(paragraphs.isNotEmpty()) { "В EPUB не найден текст (пустой spine)" }
             return BookContent(
                 title = opf.title.ifBlank { file.nameWithoutExtension },
-                paragraphs = paragraphs
+                paragraphs = paragraphs,
+                chapters = chapters
             )
         }
     }
@@ -142,20 +153,31 @@ object EpubParser {
         }
     }
 
-    /** Вытаскивает абзацы из XHTML/HTML-документа. При битой разметке — грубый regex-фолбэк. */
-    private fun extractParagraphs(input: InputStream, out: MutableList<String>) {
+    /**
+     * Вытаскивает абзацы из XHTML/HTML-документа.
+     * Возвращает текст первого заголовка h1–h6 (для оглавления) или null.
+     * При битой разметке — грубый regex-фолбэк.
+     */
+    private fun extractParagraphs(input: InputStream, out: MutableList<String>): String? {
         val bytes = input.readBytes()
+        var firstHeading: String? = null
         runCatching {
             val parser = newParser()
             parser.setInput(bytes.inputStream(), null)
 
             val sb = StringBuilder()
             var inParagraph = false
-            var skipDepth = 0 // <script>/<style>
+            var currentTag: String? = null
+            var skipDepth = 0 // <head>/<script>/<style>
 
             fun flush() {
                 val text = sb.toString().decodeHtmlEntities().replace(Regex("\\s+"), " ").trim()
-                if (text.isNotEmpty()) out.add(text)
+                if (text.isNotEmpty()) {
+                    out.add(text)
+                    if (firstHeading == null && currentTag in HEADING_TAGS) {
+                        firstHeading = text
+                    }
+                }
                 sb.setLength(0)
             }
 
@@ -171,6 +193,7 @@ object EpubParser {
                             tag in PARAGRAPH_TAGS -> {
                                 flush() // незакрытый предыдущий абзац
                                 inParagraph = true
+                                currentTag = tag
                             }
                             tag == "br" && inParagraph -> sb.append(' ')
                         }
@@ -184,6 +207,7 @@ object EpubParser {
                             tag in PARAGRAPH_TAGS -> {
                                 flush()
                                 inParagraph = false
+                                currentTag = null
                             }
                         }
                     }
@@ -202,7 +226,10 @@ object EpubParser {
                 .filter { it.isNotEmpty() }
                 .forEach { out.add(it) }
         }
+        return firstHeading
     }
+
+    private val HEADING_TAGS = setOf("h1", "h2", "h3", "h4", "h5", "h6")
 
     private fun String.decodeHtmlEntities(): String =
         replace("&nbsp;", " ")

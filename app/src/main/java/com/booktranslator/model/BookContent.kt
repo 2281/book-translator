@@ -6,5 +6,13 @@ package com.booktranslator.model
  */
 data class BookContent(
     val title: String,
-    val paragraphs: List<String>
+    val paragraphs: List<String>,
+    /** Оглавление: название главы → индекс абзаца, с которого она начинается. */
+    val chapters: List<Chapter> = emptyList()
+)
+
+/** Глава/раздел книги для оглавления. */
+data class Chapter(
+    val title: String,
+    val paragraphIndex: Int
 )

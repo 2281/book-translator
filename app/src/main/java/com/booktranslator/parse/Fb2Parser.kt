@@ -2,6 +2,7 @@ package com.booktranslator.parse
 
 import android.util.Xml
 import com.booktranslator.model.BookContent
+import com.booktranslator.model.Chapter
 import org.xmlpull.v1.XmlPullParser
 import java.io.File
 
@@ -33,14 +34,13 @@ object Fb2Parser {
                 event = parser.next()
             }
         }
-        val paragraphs = buildList {
-            state.currentParagraph.flushTo(this)
-            addAll(state.paragraphs)
-        }
+        state.currentParagraph.flushTo(state.paragraphs)
+        val paragraphs = state.paragraphs.toList()
         require(paragraphs.isNotEmpty()) { "В FB2-файле нет текста (пустой <body>)" }
         return BookContent(
             title = state.bookTitle.ifBlank { file.nameWithoutExtension },
-            paragraphs = paragraphs
+            paragraphs = paragraphs,
+            chapters = state.chapters
         )
     }
 
@@ -68,6 +68,11 @@ object Fb2Parser {
         var skipDepth = 0          // >0 — внутри <binary>/<description>/чужого body
         var inBookTitle = false    // <description>/<title-info>/<book-title>
         var sawBody = false
+        // Оглавление: секции верхнего уровня (прямые дети <body>)
+        val chapters = mutableListOf<Chapter>()
+        var pendingChapterStart: Int? = null  // индекс абзаца начала текущей секции
+        var capturingTitle = false           // внутри <title> верхнеуровневой секции
+        val titleBuf = StringBuilder()
     }
 
     private fun localName(parser: XmlPullParser): String =
@@ -98,6 +103,15 @@ object Fb2Parser {
                 }
             }
             state.bodyDepth > 0 -> {
+                // Секция верхнего уровня — глава для оглавления
+                if (tag == "section" && state.bodyDepth == 1) {
+                    state.pendingChapterStart = state.paragraphs.size
+                }
+                // <title> этой секции — название главы
+                if (tag == "title" && state.bodyDepth == 2 && state.pendingChapterStart != null) {
+                    state.capturingTitle = true
+                    state.titleBuf.setLength(0)
+                }
                 state.bodyDepth++
                 when (tag) {
                     "p", "v", "subtitle" -> state.currentParagraph.active = true
@@ -111,7 +125,10 @@ object Fb2Parser {
         when {
             state.skipDepth > 0 -> Unit
             state.inBookTitle -> state.bookTitle += parser.text
-            state.bodyDepth > 0 -> state.currentParagraph.append(parser.text)
+            state.bodyDepth > 0 -> {
+                state.currentParagraph.append(parser.text)
+                if (state.capturingTitle) state.titleBuf.append(parser.text)
+            }
         }
     }
 
@@ -128,9 +145,33 @@ object Fb2Parser {
                         state.currentParagraph.flushTo(state.paragraphs)
                         state.currentParagraph.active = false
                     }
-                    // Блочные контейнеры тоже разрывают абзац (на случай пустых строк).
-                    "title", "epigraph", "section", "poem", "cite", "stanza" ->
+                    "title" -> {
                         state.currentParagraph.flushTo(state.paragraphs)
+                        if (state.capturingTitle) {
+                            val title = state.titleBuf.toString()
+                                .replace(Regex("\\s+"), " ").trim()
+                            val start = state.pendingChapterStart
+                            if (title.isNotEmpty() && start != null) {
+                                state.chapters += Chapter(title, start)
+                            }
+                            state.capturingTitle = false
+                            state.pendingChapterStart = null
+                        }
+                    }
+                    // Блочные контейнеры тоже разрывают абзац (на случай пустых строк).
+                    "epigraph", "section", "poem", "cite", "stanza" -> {
+                        state.currentParagraph.flushTo(state.paragraphs)
+                        // Секция без заголовка — всё равно даём главу в оглавление
+                        if (tag == "section" && state.bodyDepth == 2 &&
+                            state.pendingChapterStart != null
+                        ) {
+                            state.chapters += Chapter(
+                                "Раздел ${state.chapters.size + 1}",
+                                state.pendingChapterStart!!
+                            )
+                            state.pendingChapterStart = null
+                        }
+                    }
                 }
                 state.bodyDepth--
             }
