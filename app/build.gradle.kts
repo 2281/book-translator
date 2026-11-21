@@ -13,8 +13,8 @@ android {
         applicationId = "com.booktranslator"
         minSdk = 24
         targetSdk = 35
-        versionCode = 5
-        versionName = "0.4.0"
+        versionCode = 8
+        versionName = "0.6.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
@@ -63,6 +63,9 @@ android {
 
     aaptOptions {
         noCompress += "onnx"
+        // словарную базу не сжимаем: открываем её размер через openFd
+        // (для перекопирования при обновлении словаря)
+        noCompress += "db"
     }
 }
 
