@@ -13,15 +13,10 @@ android {
         applicationId = "com.booktranslator"
         minSdk = 24
         targetSdk = 35
-        versionCode = 8
-        versionName = "0.6.0"
+        versionCode = 9
+        versionName = "0.7.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
-
-        // Оффлайн-модель перевода в assets — поддерживаем только 64-битные ABI
-        ndk {
-            abiFilters += setOf("arm64-v8a", "x86_64")
-        }
     }
 
     buildTypes {
@@ -49,23 +44,9 @@ android {
     }
 
     packaging {
-        jniLibs {
-            // libc++_shared.so есть и в onnxruntime, и в onnxruntime-extensions
-            pickFirsts += setOf(
-                "lib/arm64-v8a/libc++_shared.so",
-                "lib/x86_64/libc++_shared.so"
-            )
-        }
         resources {
             excludes += setOf("META-INF/DEPENDENCIES", "META-INF/LICENSE*")
         }
-    }
-
-    aaptOptions {
-        noCompress += "onnx"
-        // словарную базу не сжимаем: открываем её размер через openFd
-        // (для перекопирования при обновлении словаря)
-        noCompress += "db"
     }
 }
 
@@ -86,17 +67,13 @@ dependencies {
     implementation("androidx.compose.material:material-icons-extended")
     debugImplementation("androidx.compose.ui:ui-tooling")
 
-    // Каталог книг и кэш переводов
+    // Каталог книг
     implementation("androidx.room:room-runtime:2.6.1")
     implementation("androidx.room:room-ktx:2.6.1")
     ksp("androidx.room:room-compiler:2.6.1")
 
     // Настройки отображения
     implementation("androidx.datastore:datastore-preferences:1.1.1")
-
-    // Оффлайн-перевод: ONNX Runtime + расширения (SentencePiece-токенизатор)
-    implementation("com.microsoft.onnxruntime:onnxruntime-android:1.20.0")
-    implementation("com.microsoft.onnxruntime:onnxruntime-extensions-android:0.13.0")
 
     // Читаемые PDF (извлечение текстового слоя)
     implementation("com.tom-roush:pdfbox-android:2.0.27.0")

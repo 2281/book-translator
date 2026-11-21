@@ -144,9 +144,7 @@ private fun AboutDialog(onDismiss: () -> Unit) {
                     "Словарь собран из машиночитаемой Викисловаря " +
                     "(kaikki.org, на основе Wiktionary), лицензия CC BY-SA 3.0. " +
                     "Частотный список — FrequencyWords (hermitdave), " +
-                    "CC BY-SA 4.0.\n\n" +
-                    "Нейросетевая модель перевода — Helsinki-NLP " +
-                    "opus-mt-en-ru (CC-BY 4.0), конвертирована в ONNX."
+                    "CC BY-SA 4.0."
             )
         }
     )

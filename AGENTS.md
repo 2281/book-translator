@@ -6,9 +6,8 @@
 (английский → русский) по нажатию на слово. Описание продукта — в `README.md`,
 план реализации по этапам — в `ROADMAP.md`.
 
-Ключевая особенность: оффлайн-перевод слов моделью Helsinki-NLP
-`opus-mt-en-ru`, конвертированной в ONNX, выполнение на устройстве через
-ONNX Runtime.
+Ключевая особенность: оффлайн-перевод слов и устойчивых выражений
+по словарям (Викисловарь), без нейросети и без интернета.
 
 ## Технологический стек
 
@@ -16,25 +15,17 @@ ONNX Runtime.
 - **UI:** Jetpack Compose (Material 3).
 - **Сборка:** Gradle 8.10.2 (wrapper), Android Gradle Plugin 8.7.x,
   compileSdk/targetSdk 35, minSdk 24.
-- **Хранение:** Room (каталог книг, кэш переводов), DataStore (настройки).
+- **Хранение:** Room (каталог книг), DataStore (настройки).
 - **Форматы книг:** txt, fb2, epub — свои парсеры без зависимостей;
   pdf (с текстовым слоем) — `com.tom-roush:pdfbox-android:2.0.27.0`
   (init в `BookTranslatorApp.onCreate`).
-- **Перевод:** ONNX Runtime (`com.microsoft.onnxruntime:onnxruntime-android:1.20.0`),
-  токенизация SentencePiece как custom ops из
-  `onnxruntime-extensions-android:0.13.0` (класс `OrtxPackage`).
-  Модель: Helsinki-NLP `opus-mt-en-ru` → ONNX (encoder + decoder +
-  decoder_with_past, int8). Декодирование с KV-кэшем: шаг 0 через
-  `decoder_model.onnx` (выдаёт present.*, включая кросс-KV энкодера),
-  далее по одному токену через `decoder_with_past_model.onnx`.
-  ВАЖНО: у opus-mt нумерация id в vocab.json отличается от нумерации внутри
-  .spm — токенизаторные графы содержат remap-таблицы (см. `tools/`).
-- **Жизненный цикл модели:** переводчик — синглтон в `BookTranslatorApp`,
-  веса прогреваются в фоне при старте приложения и живут, пока жив процесс.
-  Инференс на CPU (4 потока). NNAPI сознательно отключён
-  (`USE_NNAPI = false` в `OnnxTranslator`): на устройствах без вендорских
-  NNAPI-драйверов ops падают на nnapi-reference, который медленнее
-  CPU-ядер ONNX Runtime.
+- **Перевод:** словарная база SQLite en→ru (~15.6 МБ,
+  `app/src/main/assets/dict/dictionary.db`), собирается скриптом
+  `tools/wiktionary/build_dictionary.py` из дампов kaikki.org
+  (машиночитаемая Викисловарь, CC BY-SA). При открытии книги в память
+  грузится словарь её словоформ (живёт, пока книга открыта) и таблица
+  фраз (живёт, пока жив процесс). Обновление базы на устройстве — по
+  `PRAGMA user_version` из заголовка SQLite (таймстамп сборки).
 - **Android SDK:** `~/Android/Sdk` (platform android-35, build-tools 34.0.0).
 
 ## Сборка и тестирование
@@ -63,9 +54,6 @@ ONNX Runtime.
   - `data/BookRepository.kt` — импорт файлов, позиция чтения, удаление.
   - `data/settings/` — настройки чтения (`ReaderSettings`, `SettingsRepository`
     на DataStore): шрифт, размер, цвета, фоновое изображение.
-  - `translate/` — перевод: интерфейс `Translator`, `OnnxTranslator`
-    (инференс ONNX: tok-encode → encoder → жадный декодер с KV-кэшем →
-    tok-decode), `CachingTranslator` (кэш в Room).
   - `model/WordSpan.kt` — разбиение текста на кликабельные слова.
   - `model/WordDictionary.kt` — словарный уровень: `WordDictionaryProvider`
     (база `assets/dict/dictionary.db`, копирование в filesDir с перезаписью
@@ -88,20 +76,11 @@ ONNX Runtime.
     `InterlinearParagraph` — собственная раскладка абзаца: кликабельные
     слова, подстрочный перевод под словом/фразой; при наложении
     подстрочников виден перевод последнего тапнутого, `SpanTranslation.seq`).
-  - `app/src/main/assets/model/` — int8 ONNX-модели encoder/decoder/
-    decoder_with_past + токенизаторные графы tok-encode/tok-decode
-    (всего ~220 МБ).
-  - `app/src/main/assets/dict/` — словарная база SQLite en→ru (~15.6 МБ,
-    хранится несжатой — `noCompress "db"` в build.gradle.kts; сборщик
-    ставит `PRAGMA user_version` = таймстамп сборки).
-- `tools/` — инструменты конвертации модели (venv, скрипты
-  `build_tokenizers.py`, `test_translate.py`, `test_translate_past.py`,
-  исходные файлы HF в `tools/hf/`).
-  Не нужны для сборки приложения.
+  - `app/src/main/assets/dict/` — словарная база SQLite en→ru (~15.6 МБ).
 - `tools/wiktionary/` — сборка словарной базы из дампов kaikki.org
   (`build_dictionary.py`; дампы `*.jsonl.gz` и итоговый `dictionary.db`
   в .gitignore — пересобираются скриптом, итог копируется в
-  `app/src/main/assets/dict/`).
+  `app/src/main/assets/dict/`). Не нужна для сборки приложения.
 - `samples/` — тестовые файлы для эмулятора (`sample-en.txt`,
   `paper-texture.png`).
   - `ui/theme/Theme.kt` — тема Material 3.

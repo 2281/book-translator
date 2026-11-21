@@ -19,10 +19,8 @@ import com.booktranslator.model.WordDictionaryProvider
 import com.booktranslator.model.WordSpan
 import com.booktranslator.model.WordSplitter
 import com.booktranslator.model.formatFromDictionary
-import com.booktranslator.model.sentenceStartBefore
 import com.booktranslator.BookTranslatorApp
 import com.booktranslator.parse.BookParser
-import com.booktranslator.translate.Translator
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -41,7 +39,6 @@ sealed interface ReaderState {
 class ReaderViewModel(
     private val repository: BookRepository,
     private val settingsRepository: SettingsRepository,
-    private val translator: Translator,
     private val dictionaryProvider: WordDictionaryProvider,
     private val bookId: Long
 ) : ViewModel() {
@@ -90,9 +87,8 @@ class ReaderViewModel(
      * 1. тап внутри уже переведённого фрагмента — снять перевод;
      * 2. слово внутри устойчивого выражения — перевод всей фразы из словаря;
      * 3. слово есть в словаре книги — словарный перевод с учётом времени
-     *    и рода (род — по местоимению слева; если его нет — уточнение
-     *    моделью с контекстом предложения);
-     * 4. слова нет в словаре — перевод моделью (подсвечивается красным).
+     *    и рода (род — по местоимению или существительному слева);
+     * 4. слова нет в словаре — подстрочник «no translate».
      */
     fun onWordTapped(paragraphIndex: Int, span: WordSpan) {
         val ready = _state.value as? ReaderState.Ready ?: return
@@ -132,60 +128,24 @@ class ReaderViewModel(
         val entries = dict?.lookup(span.word.lowercase())
         if (!entries.isNullOrEmpty() && dict != null) {
             val result = formatFromDictionary(entries, paragraph, spans, tappedIndex, dict)
-            if (result.genderUnresolved) {
-                // Глагол прош. вр. без местоимения слева — уточняем моделью
-                // с контекстом предложения; не вышло — показываем все формы
-                viewModelScope.launch {
-                    val start = sentenceStartBefore(paragraph, span.start)
-                    val fragment = paragraph.substring(start, span.end)
-                    try {
-                        val translation = translator.translate(fragment)
-                        putTranslation(paragraphIndex, SpanTranslation(
-                            start = start,
-                            end = span.end,
-                            original = fragment,
-                            translation = translation,
-                            fromIdiom = false,
-                            fromModel = true
-                        ))
-                    } catch (e: Exception) {
-                        putTranslation(paragraphIndex, SpanTranslation(
-                            start = span.start,
-                            end = span.end,
-                            original = span.word,
-                            translation = result.text,
-                            fromIdiom = false
-                        ))
-                    }
-                }
-            } else {
-                putTranslation(paragraphIndex, SpanTranslation(
-                    start = span.start,
-                    end = span.end,
-                    original = span.word,
-                    translation = result.text,
-                    fromIdiom = false
-                ))
-            }
+            putTranslation(paragraphIndex, SpanTranslation(
+                start = span.start,
+                end = span.end,
+                original = span.word,
+                translation = result.text,
+                fromIdiom = false
+            ))
             return
         }
 
-        // Слова нет в словаре — перевод моделью (подсветка красным)
-        viewModelScope.launch {
-            try {
-                val translation = translator.translate(span.word)
-                putTranslation(paragraphIndex, SpanTranslation(
-                    start = span.start,
-                    end = span.end,
-                    original = span.word,
-                    translation = translation,
-                    fromIdiom = false,
-                    fromModel = true
-                ))
-            } catch (e: Exception) {
-                // Ошибка перевода — просто не добавляем подстрочник
-            }
-        }
+        // Слова нет в словаре — перевода нет
+        putTranslation(paragraphIndex, SpanTranslation(
+            start = span.start,
+            end = span.end,
+            original = span.word,
+            translation = NO_TRANSLATION,
+            fromIdiom = false
+        ))
     }
 
     /** Счётчик тапов для разрешения наложений подстрочников. */
@@ -225,13 +185,15 @@ class ReaderViewModel(
     }
 
     companion object {
+        /** Подстрочник для слова, которого нет в словаре. */
+        private const val NO_TRANSLATION = "no translate"
+
         fun factory(context: Context, bookId: Long) = viewModelFactory {
             initializer {
                 val app = context.applicationContext as BookTranslatorApp
                 ReaderViewModel(
                     BookRepository(AppDatabase.get(app).bookDao(), app),
                     SettingsRepository(app),
-                    app.translator,
                     app.dictionaryProvider,
                     bookId
                 )

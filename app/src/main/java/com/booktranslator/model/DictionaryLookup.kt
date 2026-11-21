@@ -3,10 +3,7 @@ package com.booktranslator.model
 /** Результат словарного перевода тапнутого слова. */
 data class DictTranslation(
     /** Готовый текст перевода для подстрочника. */
-    val text: String,
-    /** true — глагол прошедшего времени, род по контексту не найден:
-     * вызывающий может уточнить перевод моделью с контекстом предложения. */
-    val genderUnresolved: Boolean
+    val text: String
 )
 
 /** Грамматический род/число для выбора формы прошедшего времени (м|ж|с|мн). */
@@ -47,27 +44,23 @@ fun formatFromDictionary(
             ?: findSubjectGender(paragraph, spans, tappedIndex, dict)
         val first = pastEntry.translations.firstOrNull() ?: ""
         if (gender != null) {
-            return DictTranslation(
-                first.pastForm(gender.variantIndex),
-                genderUnresolved = false
-            )
+            return DictTranslation(first.pastForm(gender.variantIndex))
         }
-        // Род неизвестен — показываем все формы, но сигналим вызывающему:
-        // можно уточнить моделью с контекстом
-        return DictTranslation(first.allPastForms(), genderUnresolved = true)
+        // Род неизвестен — показываем все формы единственного числа
+        return DictTranslation(first.allPastForms())
     }
 
     // Прилагательное: согласование с существительным справа
     val adjEntry = entries.firstOrNull { it.pos == "adj" }
     if (adjEntry != null) {
         val agreed = agreeAdjective(adjEntry, paragraph, spans, tappedIndex, dict)
-        if (agreed != null) return DictTranslation(agreed, genderUnresolved = false)
+        if (agreed != null) return DictTranslation(agreed)
     }
 
     // Показываем один самый подходящий вариант (первый в статье);
     // у парадигмы "м|ж|с|мн" без контекста — первая (мужская) форма
     val text = entries.firstOrNull()?.translations?.firstOrNull() ?: ""
-    return DictTranslation(text.pastForm(0), genderUnresolved = false)
+    return DictTranslation(text.pastForm(0))
 }
 
 /** Максимум слов вперёд при поиске существительного для согласования. */

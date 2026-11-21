@@ -31,9 +31,6 @@ data class SpanTranslation(
     val original: String,
     val translation: String,
     val fromIdiom: Boolean,
-    /** true — перевод нейросетевой моделью (подсвечивается отдельным цветом,
-     * т.к. менее надёжен при переводе одиночного слова без контекста). */
-    val fromModel: Boolean = false,
     /** Порядковый номер тапа: при наложении подстрочников виден перевод
      * последнего тапнутого слова. */
     val seq: Long = 0
@@ -97,7 +94,6 @@ fun InterlinearParagraph(
     translations: List<SpanTranslation>,
     style: TextStyle,
     accentColor: Color,
-    modelColor: Color,
     onWordTapped: (Int, WordSpan) -> Unit
 ) {
     val textMeasurer = rememberTextMeasurer()
@@ -106,7 +102,6 @@ fun InterlinearParagraph(
         color = accentColor,
         fontWeight = FontWeight.Medium
     )
-    val modelSubStyle = subStyle.copy(color = modelColor)
     val translatedStyle = style.copy(color = accentColor, fontWeight = FontWeight.Bold)
 
     var layout by remember { mutableStateOf<ParagraphLayout?>(null) }
@@ -139,7 +134,7 @@ fun InterlinearParagraph(
     ) { _, constraints ->
         val built = buildParagraphLayout(
             paragraph, translations, textMeasurer,
-            style, translatedStyle, subStyle, modelSubStyle, constraints.maxWidth
+            style, translatedStyle, subStyle, constraints.maxWidth
         )
         layout = built
         layout(constraints.maxWidth, built.heightPx) {}
@@ -153,7 +148,6 @@ private fun buildParagraphLayout(
     style: TextStyle,
     translatedStyle: TextStyle,
     subStyle: TextStyle,
-    modelSubStyle: TextStyle,
     maxWidth: Int
 ): ParagraphLayout {
     val spans = WordSplitter.split(paragraph)
@@ -183,7 +177,7 @@ private fun buildParagraphLayout(
         val text = paragraph.substring(atomSpan.start, atomSpan.end)
         val atomStyle = if (tr != null) translatedStyle else style
         val trLayout = tr?.let {
-            measurer.measure(it.translation, if (it.fromModel) modelSubStyle else subStyle)
+            measurer.measure(it.translation, subStyle)
         }
         atoms += Atom(text, atomSpan, tr, measurer.measure(text, atomStyle), trLayout)
         last = atomSpan.end

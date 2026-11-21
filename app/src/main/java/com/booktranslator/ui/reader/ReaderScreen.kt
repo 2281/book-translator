@@ -193,7 +193,6 @@ private fun ReaderContent(
             color = Color(settings.textColor)
         )
         val translatedColor = MaterialTheme.colorScheme.primary
-        val modelColor = MaterialTheme.colorScheme.error
 
         LazyColumn(
             state = listState,
@@ -210,7 +209,6 @@ private fun ReaderContent(
                     translations = paragraphTranslations,
                     style = textStyle,
                     accentColor = translatedColor,
-                    modelColor = modelColor,
                     onWordTapped = onWordTapped
                 )
             }
