@@ -41,29 +41,20 @@ fun formatFromDictionary(
     }
     if (pastEntry != null) {
         val gender = findContextGender(paragraph, spans, tappedIndex)
+        val first = pastEntry.translations.firstOrNull() ?: ""
         if (gender != null) {
-            val text = pastEntry.translations
-                .map { it.pastForm(gender.variantIndex) }
-                .distinct()
-                .take(MAX_VARIANTS)
-                .joinToString("; ")
-            return DictTranslation(text, genderUnresolved = false)
+            return DictTranslation(
+                first.pastForm(gender.variantIndex),
+                genderUnresolved = false
+            )
         }
         // Род неизвестен — показываем все формы, но сигналим вызывающему:
         // можно уточнить моделью с контекстом
-        val text = pastEntry.translations
-            .map { it.allPastForms() }
-            .distinct()
-            .take(2)
-            .joinToString("; ")
-        return DictTranslation(text, genderUnresolved = true)
+        return DictTranslation(first.allPastForms(), genderUnresolved = true)
     }
 
-    val text = entries
-        .flatMap { it.translations }
-        .distinct()
-        .take(MAX_VARIANTS)
-        .joinToString("; ")
+    // Показываем один самый подходящий вариант (первый в статье)
+    val text = entries.firstOrNull()?.translations?.firstOrNull() ?: ""
     return DictTranslation(text, genderUnresolved = false)
 }
 
@@ -100,6 +91,15 @@ private fun findContextGender(
     }
     return null
 }
+
+/** Индекс рода/числа по местоимению слева от слова [spans] с индексом
+ * [wordIndex] (0 — м, 1 — ж, 2 — ср, 3 — мн), null — местоимения нет.
+ * Публичная обёртка для выбора родовых форм (слова и идиомы). */
+fun contextGenderIndex(
+    paragraph: String,
+    spans: List<WordSpan>,
+    wordIndex: Int
+): Int? = findContextGender(paragraph, spans, wordIndex)?.variantIndex
 
 /** Начало текущего предложения: позиция после последнего терминатора
  * (. ! ? … перевод строки) перед [charIndex], пробелы пропущены. */

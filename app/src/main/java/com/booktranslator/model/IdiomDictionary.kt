@@ -1,8 +1,5 @@
 package com.booktranslator.model
 
-import android.content.Context
-import org.json.JSONArray
-
 /** Совпавшее устойчивое выражение: диапазон в тексте абзаца и русский смысл. */
 data class IdiomMatch(
     val start: Int,
@@ -13,8 +10,8 @@ data class IdiomMatch(
 
 /**
  * Словарь устойчивых выражений (идиом, фразовых глаголов, разговорных клише).
- * Источники: таблица phrases словарной базы (Викисловарь) + ручной
- * assets/idioms.json (приоритетнее при совпадении).
+ * Источник: таблица phrases словарной базы (Викисловарь + ручной idioms.json,
+ * влитый в базу на этапе сборки).
  *
  * Совпадение ищется по ЛЕММАМ (а не точным словоформам), поэтому
  * "spilled the beans" находит "spill the beans". Лемматизация слов
@@ -57,12 +54,43 @@ class IdiomDictionary private constructor(
                         start = start,
                         end = end,
                         phrase = paragraph.substring(start, end),
-                        translation = phrase.translation
+                        translation = chooseTranslation(
+                            phrase, paragraph, spans, startIdx, dict
+                        )
                     )
                 }
             }
         }
         return best
+    }
+
+    /**
+     * Выбирает родовую форму перевода фразы: если фраза содержит глагол
+     * прошедшего времени и слева от её начала есть местоимение, берём
+     * вариант нужного рода/числа (ruM/ruF/ruN/ruPl). Иначе — обычный перевод.
+     */
+    private fun chooseTranslation(
+        phrase: PhraseEntry,
+        paragraph: String,
+        spans: List<WordSpan>,
+        startIdx: Int,
+        dict: BookDictionary
+    ): String {
+        val hasPastVerb = (0 until phrase.lemmas.size).any { j ->
+            val word = spans[startIdx + j].word.lowercase()
+            dict.lookup(word)?.any {
+                it.pos == "verb" && (it.tags == "past" || it.tags == "pastpart")
+            } == true
+        }
+        if (!hasPastVerb) return phrase.translation
+        val gender = contextGenderIndex(paragraph, spans, startIdx) ?: return phrase.translation
+        val variant = when (gender) {
+            0 -> phrase.ruM
+            1 -> phrase.ruF
+            2 -> phrase.ruN
+            else -> phrase.ruPl
+        }
+        return variant ?: phrase.translation
     }
 
     private fun bestLength(match: IdiomMatch, spans: List<WordSpan>): Int {
@@ -78,37 +106,10 @@ class IdiomDictionary private constructor(
     companion object {
         private const val MAX_PHRASE_LEN = 8
 
-        /** Загружает фразы из базы и ручного idioms.json, строит индекс. */
-        suspend fun load(provider: WordDictionaryProvider, context: Context): IdiomDictionary {
-            val merged = LinkedHashMap<String, PhraseEntry>()
-
-            // Ручной словарь — в приоритете; слова лемматизируем через базу
-            val manual = context.assets.open("idioms.json").bufferedReader().readText()
-            val array = JSONArray(manual)
-            val manualWords = HashSet<String>()
-            val raw = List(array.length()) { i ->
-                val obj = array.getJSONObject(i)
-                val words = WordSplitter.split(obj.getString("en")).map { it.word.lowercase() }
-                manualWords += words
-                Triple(obj.getString("en"), words, obj.getString("ru"))
-            }
-            val lemmaMap = provider.lookupForms(manualWords)
-                .mapValues { (_, v) -> v.minByOrNull { it.lemma.length }?.lemma }
-            for ((en, words, ru) in raw) {
-                val lemmas = words.map { w -> lemmaMap[w] ?: w }
-                merged.putIfAbsent(
-                    lemmas.joinToString(" "),
-                    PhraseEntry(lemmas = lemmas, translation = ru, source = en)
-                )
-            }
-
-            // Фразы из словарной базы (уже лемматизированы при сборке)
-            for (p in provider.loadPhrases()) {
-                merged.putIfAbsent(p.lemmas.joinToString(" "), p)
-            }
-
+        /** Загружает фразы из словарной базы, строит индекс по первой лемме. */
+        suspend fun load(provider: WordDictionaryProvider): IdiomDictionary {
             val index = HashMap<String, MutableList<PhraseEntry>>()
-            for (p in merged.values) {
+            for (p in provider.loadPhrases()) {
                 if (p.lemmas.size in 2..MAX_PHRASE_LEN) {
                     index.getOrPut(p.lemmas.first()) { mutableListOf() }.add(p)
                 }

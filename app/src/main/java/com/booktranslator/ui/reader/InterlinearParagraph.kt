@@ -33,7 +33,10 @@ data class SpanTranslation(
     val fromIdiom: Boolean,
     /** true — перевод нейросетевой моделью (подсвечивается отдельным цветом,
      * т.к. менее надёжен при переводе одиночного слова без контекста). */
-    val fromModel: Boolean = false
+    val fromModel: Boolean = false,
+    /** Порядковый номер тапа: при наложении подстрочников виден перевод
+     * последнего тапнутого слова. */
+    val seq: Long = 0
 )
 
 /** Атом раскладки: слово, переведённая фраза или «клей» (пробелы/пунктуация). */
@@ -50,6 +53,8 @@ private class Atom(
 private class PlacedAtom(val atom: Atom, val x: Float) {
     /** X подстрочного перевода (после разрешения пересечений на строке). */
     var subX: Float = 0f
+    /** true — подстрочник скрыт: пересекается с переводом, тапнутым позже. */
+    var hideSub: Boolean = false
 }
 
 private class Line(val y: Float) {
@@ -122,7 +127,7 @@ fun InterlinearParagraph(
                     for (placed in line.atoms) {
                         val atom = placed.atom
                         drawText(atom.layout, topLeft = Offset(placed.x, line.y))
-                        if (atom.translation != null && atom.translationLayout != null) {
+                        if (atom.translation != null && atom.translationLayout != null && !placed.hideSub) {
                             drawText(
                                 atom.translationLayout,
                                 topLeft = Offset(placed.subX, line.y + l.mainHeight)
@@ -221,22 +226,36 @@ private fun buildParagraphLayout(
     }
 
     // Разрешаем пересечения подстрочных переводов на каждой строке:
-    // центрируем под словом, но не наезжаем на соседа справа и не вылезаем
-    // за края абзаца
-    val gap = 8f
+    // центрируем под словом и клампим в границы абзаца; при наложении
+    // виден только перевод последнего тапнутого слова (больший seq)
     for (line in lines) {
-        var rightEdge = -gap
+        val visible = mutableListOf<PlacedAtom>()
         for (placed in line.atoms) {
             val atom = placed.atom
             val tl = atom.translationLayout ?: continue
             val subW = tl.size.width.toFloat()
             var subX = placed.x + atom.width / 2f - subW / 2f
-            if (subX < rightEdge + gap) subX = rightEdge + gap
             val maxX = (maxWidth - subW).coerceAtLeast(0f)
             if (subX > maxX) subX = maxX
             if (subX < 0f) subX = 0f
             placed.subX = subX
-            rightEdge = subX + subW
+            val seq = atom.translation?.seq ?: 0L
+            val iter = visible.iterator()
+            while (iter.hasNext()) {
+                val other = iter.next()
+                val oAtom = other.atom
+                val oW = oAtom.translationLayout?.size?.width?.toFloat() ?: continue
+                val overlaps = subX < other.subX + oW && other.subX < subX + subW
+                if (!overlaps) continue
+                val oSeq = oAtom.translation?.seq ?: 0L
+                if (oSeq < seq) {
+                    other.hideSub = true
+                    iter.remove()
+                } else {
+                    placed.hideSub = true
+                }
+            }
+            if (!placed.hideSub) visible += placed
         }
     }
     return ParagraphLayout(

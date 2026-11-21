@@ -18,11 +18,17 @@ data class WordEntry(
     val translations: List<String>
 )
 
-/** Устойчивая фраза: последовательность лемм и русский перевод. */
+/** Устойчивая фраза: последовательность лемм и русский перевод.
+ * ruM/ruF/ruN/ruPl — варианты перевода в прошедшем времени по родам
+ * (если перевод содержит глагол, который удалось проспрягать при сборке). */
 data class PhraseEntry(
     val lemmas: List<String>,
     val translation: String,
-    val source: String
+    val source: String,
+    val ruM: String? = null,
+    val ruF: String? = null,
+    val ruN: String? = null,
+    val ruPl: String? = null
 )
 
 /**
@@ -65,12 +71,18 @@ class WordDictionaryProvider(private val context: Context) {
         phrases?.let { return it }
         val result = withContext(Dispatchers.IO) {
             val list = mutableListOf<PhraseEntry>()
-            openDb().rawQuery("SELECT lemmas, ru, src FROM phrases", null).use { c ->
+            openDb().rawQuery(
+                "SELECT lemmas, ru, src, ru_m, ru_f, ru_n, ru_pl FROM phrases", null
+            ).use { c ->
                 while (c.moveToNext()) {
                     list += PhraseEntry(
                         lemmas = c.getString(0).split(" "),
                         translation = c.getString(1),
-                        source = c.getString(2)
+                        source = c.getString(2),
+                        ruM = c.getString(3),
+                        ruF = c.getString(4),
+                        ruN = c.getString(5),
+                        ruPl = c.getString(6)
                     )
                 }
             }

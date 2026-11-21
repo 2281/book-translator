@@ -17,10 +17,10 @@ tr — JSON-массив вариантов перевода; для прош. �
 
 import gzip
 import json
+import os
 import re
 import sqlite3
 import sys
-import unicodedata
 
 EN_DUMP = "kaikki-en.jsonl.gz"
 RU_DUMP = "kaikki-ru.jsonl.gz"
@@ -261,32 +261,39 @@ def build():
     def variants_json(key, tag):
         """JSON вариантов перевода с учётом грамматики формы."""
         lemma, pos = key
-        out = []
+        out = []  # (приоритет, текст): для прош. вр. совершенный вид — первым
         for _, variants in lemmas[key]:
+            sense_out = []
             for w, vtags in variants:
+                prio = 0
                 if pos == "verb" and w in verbs:
                     v = verbs[w]
                     if tag in ("past", "pastpart"):
                         pm, pf, pn, ppl = (v.get(k) for k in ("past_m", "past_f", "past_n", "past_pl"))
                         if pm and pf and pn:
-                            out.append(f"{pm}|{pf}|{pn}|{ppl or pm}")
+                            prio = 0 if "perfective" in vtags else 1
+                            sense_out.append((prio, f"{pm}|{pf}|{pn}|{ppl or pm}"))
                             continue
                     if tag == "pres3" and v.get("pres3"):
-                        out.append(v["pres3"])
+                        sense_out.append((prio, v["pres3"]))
                         continue
                     if tag == "gerund" and v.get("part_pres"):
-                        out.append(v["part_pres"])
+                        sense_out.append((prio, v["part_pres"]))
                         continue
-                    out.append(w)
+                    sense_out.append((prio, w))
                 elif pos == "noun" and tag == "plural" and w in nouns and nouns[w].get("plural"):
-                    out.append(nouns[w]["plural"])
+                    sense_out.append((prio, nouns[w]["plural"]))
                 elif pos == "adj" and tag == "comparative" and w in adjs and adjs[w].get("comparative"):
-                    out.append(adjs[w]["comparative"])
+                    sense_out.append((prio, adjs[w]["comparative"]))
                 else:
-                    out.append(w)
+                    sense_out.append((prio, w))
+            # совершенный вид первым — но только внутри своего значения,
+            # чтобы редкие значения не выскакивали вперёд основных
+            sense_out.sort(key=lambda x: x[0])
+            out.extend(sense_out)
         # дедупликация с сохранением порядка
         seen, dedup = set(), []
-        for o in out:
+        for _, o in out:
             if o not in seen:
                 seen.add(o)
                 dedup.append(o)
@@ -331,15 +338,66 @@ def build():
 
     print(f"  строк words: {len(rows)}")
 
+    # Ручные переопределения для слов, где первые значения Викисловаря
+    # дают не то («they»: первые значения — про singular they)
+    OVERRIDES = {
+        "they": ["они"],
+        "them": ["их", "им"],
+        "their": ["их"],
+    }
+    for (form, pos), (lemma, tag, _) in list(rows.items()):
+        if form in OVERRIDES:
+            rows[(form, pos)] = (lemma, tag, json.dumps(OVERRIDES[form], ensure_ascii=False))
+
     # фразы: лемматизация слов фразы через построенную карту форм
     form2lemma = {}
     for (form, pos), (lemma, _, _) in rows.items():
         form2lemma.setdefault(form, lemma)
 
+    # Спрягаем русский перевод фразы в прошедшем времени по родам:
+    # первый глагол каждого сегмента перевода -> форма прош. вр.
+    def conjugate_ru(ru_str, form_key):
+        segs = re.split(r"([,;]\s*)", ru_str)
+        out, changed = [], False
+        for seg in segs:
+            if re.fullmatch(r"[,;]\s*", seg or ""):
+                out.append(seg)
+                continue
+            tokens = seg.split(" ")
+            for i, tok in enumerate(tokens):
+                clean = tok.strip("()«»\"'")
+                v = verbs.get(clean)
+                if v and v.get("past_m"):
+                    pre = tok[:len(tok) - len(tok.lstrip("()«»\"'"))]
+                    suf = tok[len(tok.rstrip("()«»\"'")):]
+                    tokens[i] = pre + v.get(form_key, v["past_m"]) + suf
+                    changed = True
+                    break
+            out.append(" ".join(tokens))
+        return "".join(out) if changed else None
+
+    # Ручной словарь идиом из приложения — в приоритете (идёт первым)
     phrase_rows = []
+    seen_phrases = set()
+    manual_path = os.path.join(os.path.dirname(__file__),
+                               "..", "..", "app", "src", "main", "assets", "idioms.json")
+    with open(manual_path, encoding="utf-8") as f:
+        for obj in json.load(f):
+            ws = re.findall(r"[A-Za-z]+(?:['’\-][A-Za-z]+)*", obj["en"].lower())
+            if len(ws) < 2:
+                continue
+            lemmatized = " ".join(form2lemma.get(w, w) for w in ws)
+            if lemmatized in seen_phrases:
+                continue
+            seen_phrases.add(lemmatized)
+            phrase_rows.append((lemmatized, obj["ru"], obj["en"]))
+
     for ph, trs in phrases.items():
         ws = ph.split()
         lemmatized = " ".join(form2lemma.get(w, w) for w in ws)
+        if lemmatized in seen_phrases:
+            continue
+        seen_phrases.add(lemmatized)
         variants = []
         for _, vv in trs:
             for w, _ in vv:
@@ -347,8 +405,16 @@ def build():
                     variants.append(w)
         phrase_rows.append((lemmatized, "; ".join(variants[:MAX_TRANSLATIONS]), ph))
 
+    # родовые варианты прош. вр. для фраз (м/ж/с/мн)
+    phrase_rows_full = []
+    for lemmatized, ru, src in phrase_rows:
+        phrase_rows_full.append((
+            lemmatized, ru, src,
+            conjugate_ru(ru, "past_m"), conjugate_ru(ru, "past_f"),
+            conjugate_ru(ru, "past_n"), conjugate_ru(ru, "past_pl"),
+        ))
+
     # запись SQLite
-    import os
     if os.path.exists(OUT):
         os.remove(OUT)
     con = sqlite3.connect(OUT)
@@ -361,21 +427,25 @@ def build():
                            tr TEXT NOT NULL, PRIMARY KEY(form, pos));
         CREATE INDEX idx_words_form ON words(form);
         CREATE TABLE phrases(lemmas TEXT NOT NULL, ru TEXT NOT NULL,
-                             src TEXT NOT NULL);
+                             src TEXT NOT NULL,
+                             ru_m TEXT, ru_f TEXT, ru_n TEXT, ru_pl TEXT);
         CREATE INDEX idx_phrases_lemmas ON phrases(lemmas);
     """)
     cur.executemany(
         "INSERT OR IGNORE INTO words(form, pos, lemma, tags, tr) VALUES (?,?,?,?,?)",
         [(f, p, l, t, tr) for (f, p), (l, t, tr) in rows.items()],
     )
-    cur.executemany("INSERT INTO phrases(lemmas, ru, src) VALUES (?,?,?)", phrase_rows)
+    cur.executemany(
+        "INSERT INTO phrases(lemmas, ru, src, ru_m, ru_f, ru_n, ru_pl) VALUES (?,?,?,?,?,?,?)",
+        phrase_rows_full,
+    )
     con.commit()
     con.execute("VACUUM")
     con.close()
 
-    import os
+    gendered = sum(1 for r in phrase_rows_full if r[3])
     size = os.path.getsize(OUT) / 1e6
-    print(f"готово: {OUT}, {size:.1f} МБ, слов {len(rows)}, фраз {len(phrase_rows)}")
+    print(f"готово: {OUT}, {size:.1f} МБ, слов {len(rows)}, фраз {len(phrase_rows_full)} (с родами: {gendered})")
 
 
 if __name__ == "__main__":

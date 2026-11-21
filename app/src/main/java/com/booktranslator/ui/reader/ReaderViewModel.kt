@@ -43,7 +43,6 @@ class ReaderViewModel(
     private val settingsRepository: SettingsRepository,
     private val translator: Translator,
     private val dictionaryProvider: WordDictionaryProvider,
-    private val appContext: Context,
     private val bookId: Long
 ) : ViewModel() {
 
@@ -81,7 +80,7 @@ class ReaderViewModel(
             // Словарь книги и фразы — в память, пока книга открыта
             runCatching {
                 bookDictionary = BookDictionary.build(dictionaryProvider, parsed.paragraphs)
-                idiomDictionary = IdiomDictionary.load(dictionaryProvider, appContext)
+                idiomDictionary = IdiomDictionary.load(dictionaryProvider)
             }
         }
     }
@@ -189,9 +188,12 @@ class ReaderViewModel(
         }
     }
 
+    /** Счётчик тапов для разрешения наложений подстрочников. */
+    private var translationSeq = 0L
+
     private fun putTranslation(paragraphIndex: Int, tr: SpanTranslation) {
         val key = "$paragraphIndex:${tr.start}:${tr.end}"
-        _translations.value = _translations.value + (key to tr)
+        _translations.value = _translations.value + (key to tr.copy(seq = ++translationSeq))
     }
 
     fun savePosition(index: Int, offset: Int) {
@@ -231,7 +233,6 @@ class ReaderViewModel(
                     SettingsRepository(app),
                     app.translator,
                     app.dictionaryProvider,
-                    app.applicationContext,
                     bookId
                 )
             }
