@@ -9,6 +9,7 @@ import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import java.io.File
 import java.io.FileOutputStream
+import java.io.InputStream
 
 /** Словарная статья одного чтения словоформы (одна часть речи). */
 data class WordEntry(
@@ -53,10 +54,13 @@ class WordDictionaryProvider(private val context: Context) {
         withContext(Dispatchers.IO) {
             val out = File(context.filesDir, DB_NAME)
             // Перекопируем, если копия отсутствует или словарь в assets
-            // обновился (сравниваем размер — при обновлении приложения
-            // старая копия в filesDir остаётся)
-            val assetSize = context.assets.openFd("dict/$DB_NAME").use { it.length }
-            if (!out.exists() || out.length() != assetSize) {
+            // обновился. Сравниваем user_version из заголовка SQLite:
+            // размер файла при обновлении данных может совпасть
+            val assetVersion = context.assets.open("dict/$DB_NAME").use { readUserVersion(it) }
+            val copyVersion = if (out.exists()) {
+                out.inputStream().use { readUserVersion(it) }
+            } else -1L
+            if (copyVersion != assetVersion) {
                 context.assets.open("dict/$DB_NAME").use { input ->
                     FileOutputStream(out).use { output -> input.copyTo(output) }
                 }
@@ -64,6 +68,22 @@ class WordDictionaryProvider(private val context: Context) {
             SQLiteDatabase.openDatabase(out.path, null, SQLiteDatabase.OPEN_READONLY)
                 .also { db = it }
         }
+    }
+
+    /** user_version из заголовка SQLite (big-endian int по смещению 60). */
+    private fun readUserVersion(input: InputStream): Long {
+        val header = ByteArray(64)
+        var read = 0
+        while (read < header.size) {
+            val n = input.read(header, read, header.size - read)
+            if (n < 0) break
+            read += n
+        }
+        if (read < header.size) return -1L
+        return ((header[60].toLong() and 0xFF) shl 24) or
+            ((header[61].toLong() and 0xFF) shl 16) or
+            ((header[62].toLong() and 0xFF) shl 8) or
+            (header[63].toLong() and 0xFF)
     }
 
     /** Все фразы-идиомы (индекс по первой лемме строится у потребителя). */
@@ -127,6 +147,32 @@ class WordDictionaryProvider(private val context: Context) {
             result
         }
 
+    /** Род (m/f/n) русских слов (таблица ru_gender) — для согласования
+     * прилагательных и определения рода подлежащего. */
+    suspend fun lookupGenders(words: Set<String>): Map<String, String> =
+        withContext(Dispatchers.IO) {
+            val result = HashMap<String, String>(words.size)
+            val database = openDb()
+            val chunk = ArrayList<String>(900)
+            fun flush() {
+                if (chunk.isEmpty()) return
+                val placeholders = chunk.joinToString(",") { "?" }
+                database.rawQuery(
+                    "SELECT word, gender FROM ru_gender WHERE word IN ($placeholders)",
+                    chunk.toTypedArray()
+                ).use { c ->
+                    while (c.moveToNext()) result[c.getString(0)] = c.getString(1)
+                }
+                chunk.clear()
+            }
+            for (w in words) {
+                chunk.add(w)
+                if (chunk.size >= 900) flush()
+            }
+            flush()
+            result
+        }
+
     companion object {
         const val DB_NAME = "dictionary.db"
     }
@@ -139,13 +185,18 @@ class WordDictionaryProvider(private val context: Context) {
  */
 class BookDictionary(
     private val entries: Map<String, List<WordEntry>>,
-    private val lemmaOf: Map<String, String>
+    private val lemmaOf: Map<String, String>,
+    /** Род русских существительных-переводов (m/f/n). */
+    private val genders: Map<String, String>
 ) {
     /** Статьи для словоформы (lowercase), или null, если слова нет в словаре. */
     fun lookup(form: String): List<WordEntry>? = entries[form]
 
     /** Лемма словоформы; если слово неизвестно словарю — сама форма. */
     fun lemma(form: String): String = lemmaOf[form] ?: form
+
+    /** Род русского существительного ("m"/"f"/"n") или null. */
+    fun ruGender(ruWord: String): String? = genders[ruWord]
 
     companion object {
         /** Собирает словарь книги: сканирует абзацы, выбирает статьи из базы. */
@@ -164,7 +215,17 @@ class BookDictionary(
             for ((form, list) in found) {
                 lemmaOf[form] = list.minByOrNull { it.lemma.length }?.lemma ?: form
             }
-            return BookDictionary(found, lemmaOf)
+            // род существительных-переводов: согласование прилагательных
+            // и род подлежащего у глаголов прош. вр.
+            val ruNouns = HashSet<String>()
+            for ((_, list) in found) {
+                for (e in list) {
+                    if (e.pos != "noun") continue
+                    for (tr in e.translations) ruNouns.add(tr.substringBefore("|"))
+                }
+            }
+            val genders = provider.lookupGenders(ruNouns)
+            return BookDictionary(found, lemmaOf, genders)
         }
     }
 }

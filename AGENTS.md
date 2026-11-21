@@ -69,10 +69,14 @@ ONNX Runtime.
   - `model/WordSpan.kt` — разбиение текста на кликабельные слова.
   - `model/WordDictionary.kt` — словарный уровень: `WordDictionaryProvider`
     (база `assets/dict/dictionary.db`, копирование в filesDir с перезаписью
-    при изменении размера) и `BookDictionary` (словарь открытой книги
-    в памяти: словоформы книги → статьи, лемматизация).
+    при смене `user_version` из заголовка SQLite) и `BookDictionary`
+    (словарь открытой книги в памяти: словоформы книги → статьи,
+    лемматизация, род русских существительных из таблицы `ru_gender`).
   - `model/DictionaryLookup.kt` — выбор словарного перевода (один вариант)
-    с учётом времени/числа и рода по местоимению слева в предложении.
+    с учётом времени/числа: род прош. вр. — по местоимению или
+    существительному-подлежащему слева в клаузе; прилагательные
+    согласуются с существительным справа (род/число + жен. вин. падеж,
+    если слева есть глагол).
   - `model/IdiomDictionary.kt` — устойчивые выражения (таблица phrases
     словарной базы; ручной `assets/idioms.json` влит в базу на этапе
     сборки), поиск самого длинного совпадения при тапе по ЛЕММАМ
@@ -87,8 +91,9 @@ ONNX Runtime.
   - `app/src/main/assets/model/` — int8 ONNX-модели encoder/decoder/
     decoder_with_past + токенизаторные графы tok-encode/tok-decode
     (всего ~220 МБ).
-  - `app/src/main/assets/dict/` — словарная база SQLite en→ru (~12.5 МБ,
-    хранится несжатой — `noCompress "db"` в build.gradle.kts).
+  - `app/src/main/assets/dict/` — словарная база SQLite en→ru (~15.6 МБ,
+    хранится несжатой — `noCompress "db"` в build.gradle.kts; сборщик
+    ставит `PRAGMA user_version` = таймстамп сборки).
 - `tools/` — инструменты конвертации модели (venv, скрипты
   `build_tokenizers.py`, `test_translate.py`, `test_translate_past.py`,
   исходные файлы HF в `tools/hf/`).

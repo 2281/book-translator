@@ -130,8 +130,8 @@ class ReaderViewModel(
 
         // Слово из словаря книги
         val entries = dict?.lookup(span.word.lowercase())
-        if (!entries.isNullOrEmpty()) {
-            val result = formatFromDictionary(entries, paragraph, spans, tappedIndex)
+        if (!entries.isNullOrEmpty() && dict != null) {
+            val result = formatFromDictionary(entries, paragraph, spans, tappedIndex, dict)
             if (result.genderUnresolved) {
                 // Глагол прош. вр. без местоимения слева — уточняем моделью
                 // с контекстом предложения; не вышло — показываем все формы

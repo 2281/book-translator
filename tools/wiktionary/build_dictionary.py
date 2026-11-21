@@ -12,7 +12,11 @@
 tags (компактные): past, pastpart, pres3, gerund, plural, comparative,
 superlative, "" (базовая форма).
 tr — JSON-массив вариантов перевода; для прош. вр. глаголов вариант
-имеет вид "м|ж|с|мн" (шёл|шла|шло|шли) — род выбирается на устройстве.
+имеет вид "м|ж|с|мн" (шёл|шла|шло|шли), для прилагательных —
+"м|ж|с|мн[|ж.вин]" (старый|старая|старое|старые|старую) — род/число
+выбирается на устройстве по существительному справа.
+ru_gender(word, gender) — род (m/f/n) русских существительных
+из переводов: согласование прилагательных и род подлежащего.
 """
 
 import gzip
@@ -21,6 +25,7 @@ import os
 import re
 import sqlite3
 import sys
+import time
 
 EN_DUMP = "kaikki-en.jsonl.gz"
 RU_DUMP = "kaikki-ru.jsonl.gz"
@@ -38,6 +43,166 @@ SKIP_FORM_TAGS = {
     "romanization", "table-tags", "class", "inflection-template",
     "canonical", "dated", "obsolete", "alternative", "nonstandard",
     "error-unrecognized-form", "archaic",
+}
+
+# Ручные переводы для частых слов, где таблицы переводов английского
+# Викисловаря неполны: у главного значения перевода часто нет вообще
+# (woman → ничего, dog → «кобель», house → «палата», girl → «служанка»).
+# (form, pos, tag, lemma) -> варианты; существующие строки заменяются,
+# отсутствующие — добавляются. Парадигмы "м|ж|с|мн[|ж.вин]" для
+# прилагательных и прош. вр. глаголов — как в основных данных.
+MANUAL = {
+    ("they", "pron", "plural", "they"): ["они"],
+    ("them", "pron", "plural", "they"): ["их", "им"],
+    ("their", "det", "", "their"): ["их"],
+    ("beside", "prep", "", "beside"): ["рядом с", "возле", "помимо"],
+    ("old", "adj", "", "old"): [
+        "старый|старая|старое|старые|старую",
+        "пожилой|пожилая|пожилое|пожилые|пожилую",
+        "бывший|бывшая|бывшее|бывшие|бывшую"],
+    # существительные
+    ("woman", "noun", "", "woman"): ["женщина"],
+    ("women", "noun", "plural", "woman"): ["женщины"],
+    ("man", "noun", "", "man"): ["мужчина", "человек"],
+    ("girl", "noun", "", "girl"): ["девочка", "девушка"],
+    ("dog", "noun", "", "dog"): ["собака", "пёс"],
+    ("house", "noun", "", "house"): ["дом", "здание"],
+    ("mom", "noun", "", "mom"): ["мама"],
+    ("mommy", "noun", "", "mom"): ["мамочка", "мама"],
+    ("morning", "noun", "", "morning"): ["утро"],
+    ("police", "noun", "", "police"): ["полиция"],
+    ("week", "noun", "", "week"): ["неделя"],
+    ("weeks", "noun", "plural", "week"): ["недели"],
+    ("movie", "noun", "", "movie"): ["фильм"],
+    ("movies", "noun", "plural", "movie"): ["фильмы"],
+    ("sea", "noun", "", "sea"): ["море"],
+    ("killer", "noun", "", "killer"): ["убийца"],
+    ("killers", "noun", "plural", "killer"): ["убийцы"],
+    ("cat", "noun", "", "cat"): ["кошка", "кот"],
+    ("cats", "noun", "plural", "cat"): ["кошки", "коты"],
+    ("wine", "noun", "", "wine"): ["вино"],
+    ("kitchen", "noun", "", "kitchen"): ["кухня"],
+    ("bathroom", "noun", "", "bathroom"): ["ванная", "туалет"],
+    ("conversation", "noun", "", "conversation"): ["разговор"],
+    ("conversations", "noun", "plural", "conversation"): ["разговоры"],
+    ("photo", "noun", "", "photo"): ["фото", "фотография"],
+    ("photos", "noun", "plural", "photo"): ["фото", "фотографии"],
+    ("sheriff", "noun", "", "sheriff"): ["шериф"],
+    ("lab", "noun", "", "lab"): ["лаборатория"],
+    ("responsibility", "noun", "", "responsibility"): ["ответственность"],
+    ("mayor", "noun", "", "mayor"): ["мэр"],
+    ("style", "noun", "", "style"): ["стиль"],
+    ("humans", "noun", "plural", "human"): ["люди"],
+    ("council", "noun", "", "council"): ["совет"],
+    ("honour", "noun", "", "honour"): ["честь"],
+    ("destiny", "noun", "", "destiny"): ["судьба"],
+    ("wheel", "noun", "", "wheel"): ["колесо"],
+    ("wheels", "noun", "plural", "wheel"): ["колёса"],
+    ("garbage", "noun", "", "garbage"): ["мусор"],
+    ("tiger", "noun", "", "tiger"): ["тигр"],
+    ("basement", "noun", "", "basement"): ["подвал"],
+    ("bowl", "noun", "", "bowl"): ["миска", "чаша"],
+    ("favour", "noun", "", "favour"): ["одолжение", "услуга"],
+    ("neighbor", "noun", "", "neighbor"): ["сосед", "соседка"],
+    ("neighbors", "noun", "plural", "neighbor"): ["соседи"],
+    ("therapy", "noun", "", "therapy"): ["терапия"],
+    ("odds", "noun", "plural", "odds"): ["шансы"],
+    ("policeman", "noun", "", "policeman"): ["полицейский"],
+    ("colour", "noun", "", "colour"): ["цвет"],
+    ("theatre", "noun", "", "theatre"): ["театр"],
+    ("consequences", "noun", "plural", "consequence"): ["последствия"],
+    ("shark", "noun", "", "shark"): ["акула"],
+    ("whiskey", "noun", "", "whiskey"): ["виски"],
+    ("twin", "noun", "", "twin"): ["близнец"],
+    ("twins", "noun", "plural", "twin"): ["близнецы"],
+    ("locker", "noun", "", "locker"): ["шкафчик"],
+    ("blonde", "noun", "", "blonde"): ["блондинка", "блондин"],
+    ("cookie", "noun", "", "cookie"): ["печенье"],
+    ("cookies", "noun", "plural", "cookie"): ["печенье"],
+    ("fridge", "noun", "", "fridge"): ["холодильник"],
+    ("cocaine", "noun", "", "cocaine"): ["кокаин"],
+    ("cemetery", "noun", "", "cemetery"): ["кладбище"],
+    ("aircraft", "noun", "", "aircraft"): ["самолёт"],
+    ("embassy", "noun", "", "embassy"): ["посольство"],
+    ("defence", "noun", "", "defence"): ["защита"],
+    ("wolves", "noun", "plural", "wolf"): ["волки"],
+    ("coal", "noun", "", "coal"): ["уголь"],
+    ("cousin", "noun", "", "cousin"): ["двоюродный брат", "двоюродная сестра"],
+    ("traveler", "noun", "", "traveler"): ["путешественник", "путешественница"],
+    ("traveled", "verb", "past", "travel"): [
+        "путешествовал|путешествовала|путешествовало|путешествовали"],
+    ("sweetie", "noun", "", "sweetie"): ["милашка", "дорогая"],
+    # прилагательные
+    ("ready", "adj", "", "ready"): ["готовый|готова|готовое|готовые|готовую"],
+    ("happy", "adj", "", "happy"): [
+        "счастливый|счастливая|счастливое|счастливые|счастливую",
+        "довольный|довольная|довольное|довольные|довольную"],
+    ("happier", "adj", "comparative", "happy"): ["счастливее"],
+    ("beautiful", "adj", "", "beautiful"): [
+        "красивый|красивая|красивое|красивые|красивую",
+        "прекрасный|прекрасная|прекрасное|прекрасные|прекрасную"],
+    ("wonderful", "adj", "", "wonderful"): [
+        "замечательный|замечательная|замечательное|замечательные|замечательную",
+        "чудесный|чудесная|чудесное|чудесные|чудесную"],
+    ("rich", "adj", "", "rich"): ["богатый|богатая|богатое|богатые|богатую"],
+    ("favorite", "adj", "", "favorite"): ["любимый|любимая|любимое|любимые|любимую"],
+    ("heavy", "adj", "", "heavy"): ["тяжёлый|тяжёлая|тяжёлое|тяжёлые|тяжёлую"],
+    ("delicious", "adj", "", "delicious"): ["вкусный|вкусная|вкусное|вкусные|вкусную"],
+    ("mobile", "adj", "", "mobile"): ["мобильный|мобильная|мобильное|мобильные|мобильную"],
+    ("confident", "adj", "", "confident"): ["уверенный|уверенная|уверенное|уверенные|уверенную"],
+    ("grey", "adj", "", "grey"): ["серый|серая|серое|серые|серую"],
+    ("internal", "adj", "", "internal"): [
+        "внутренний|внутренняя|внутреннее|внутренние|внутреннюю"],
+    ("sunny", "adj", "", "sunny"): ["солнечный|солнечная|солнечное|солнечные|солнечную"],
+    ("unfair", "adj", "", "unfair"): [
+        "несправедливый|несправедливая|несправедливое|несправедливые|несправедливую"],
+    ("vulnerable", "adj", "", "vulnerable"): ["уязвимый|уязвимая|уязвимое|уязвимые|уязвимую"],
+    ("aggressive", "adj", "", "aggressive"): [
+        "агрессивный|агрессивная|агрессивное|агрессивные|агрессивную"],
+    ("rusty", "adj", "", "rusty"): ["ржавый|ржавая|ржавое|ржавые|ржавую"],
+    ("slight", "adj", "", "slight"): [
+        "небольшой|небольшая|небольшое|небольшие|небольшую",
+        "лёгкий|лёгкая|лёгкое|лёгкие|лёгкую"],
+    # глаголы
+    ("shut", "verb", "", "shut"): ["закрыть", "захлопнуть"],
+    ("die", "verb", "", "die"): ["умереть", "умирать"],
+    ("died", "verb", "past", "die"): ["умер|умерла|умерло|умерли"],
+    ("forgive", "verb", "", "forgive"): ["простить", "прощать"],
+    ("create", "verb", "", "create"): ["создать", "создавать"],
+    ("created", "verb", "past", "create"): ["создал|создала|создало|создали"],
+    ("remove", "verb", "", "remove"): ["убрать", "удалить"],
+    ("removed", "verb", "past", "remove"): ["убрал|убрала|убрало|убрали"],
+    ("defend", "verb", "", "defend"): ["защитить", "защищать"],
+    ("settle", "verb", "", "settle"): ["урегулировать", "поселиться"],
+    ("realise", "verb", "", "realise"): ["понять", "осознать"],
+    ("realised", "verb", "past", "realise"): [
+        "понял|поняла|поняло|поняли", "осознал|осознала|осознало|осознали"],
+    ("recognise", "verb", "", "recognise"): ["узнать", "признать"],
+    ("wanna", "verb", "", "want"): ["хотеть"],
+    ("gonna", "verb", "", "go"): ["собираться"],
+    # наречия и прочее
+    ("okay", "adv", "", "okay"): ["хорошо", "ладно"],
+    ("alright", "adv", "", "alright"): ["хорошо", "ладно"],
+    ("anymore", "adv", "", "anymore"): ["больше"],
+    ("perhaps", "adv", "", "perhaps"): ["возможно", "пожалуй"],
+    ("totally", "adv", "", "totally"): ["совершенно", "полностью"],
+    ("possibly", "adv", "", "possibly"): ["возможно"],
+    ("upon", "prep", "", "upon"): ["на", "по"],
+    ("nor", "conj", "", "nor"): ["и не", "ни"],
+    ("among", "prep", "", "among"): ["среди", "между"],
+    ("towards", "prep", "", "towards"): ["к", "по направлению к"],
+    ("lately", "adv", "", "lately"): ["недавно", "в последнее время"],
+    ("recently", "adv", "", "recently"): ["недавно"],
+    ("carefully", "adv", "", "carefully"): ["осторожно", "внимательно"],
+    ("literally", "adv", "", "literally"): ["буквально"],
+    ("particularly", "adv", "", "particularly"): ["особенно"],
+    ("elsewhere", "adv", "", "elsewhere"): ["в другом месте"],
+    ("nicely", "adv", "", "nicely"): ["хорошо", "мило"],
+    ("backwards", "adv", "", "backwards"): ["назад", "в обратную сторону"],
+    ("kinda", "adv", "", "kinda"): ["вроде", "типа"],
+    ("bye", "intj", "", "bye"): ["пока"],
+    ("goodnight", "intj", "", "goodnight"): ["спокойной ночи"],
+    ("good-bye", "intj", "", "good-bye"): ["до свидания"],
 }
 
 
@@ -182,8 +347,9 @@ def pass_ru(ru_needed):
     """ru_needed: множество русских слов (без ударений), встретившихся
     в переводах. Возвращает морфологию только для них."""
     verbs = {}   # word -> {"pres3":..., "past_m":..., "past_f":..., "past_n":..., "past_pl":...}
-    nouns = {}   # word -> {"plural":...}
-    adjs = {}    # word -> {"comparative":...}
+    nouns = {}   # word -> {"plural":..., "gender": "m"/"f"/"n"}
+    adjs = {}    # word -> {"comparative":..., "f":..., "n":..., "pl":..., "acc_f":...}
+    GENDER_TAGS = {"masculine": "m", "feminine": "f", "neuter": "n"}
     n = 0
     with gzip.open(RU_DUMP, "rt", encoding="utf-8") as f:
         for line in f:
@@ -202,6 +368,23 @@ def pass_ru(ru_needed):
             if word not in ru_needed:
                 continue
             pos = d.get("pos", "")
+            if pos == "noun":
+                # род существительного: из expansion шаблона заголовка
+                # ("река • (reká) f inan ..."), запасной вариант — теги значений
+                g = None
+                for ht in d.get("head_templates", []):
+                    m = re.search(r"\)\s*([mfn])\s+(?:in)?an(?:im)?\b", ht.get("expansion", ""))
+                    if m:
+                        g = m.group(1)
+                        break
+                if not g:
+                    for s in d.get("senses", []):
+                        g = next((GENDER_TAGS[t] for t in s.get("tags", [])
+                                  if t in GENDER_TAGS), None)
+                        if g:
+                            break
+                if g:
+                    nouns.setdefault(word, {}).setdefault("gender", g)
             for fo in d.get("forms", []):
                 fw = fo.get("form", "")
                 if not fw or fw == "-" or " " in fw:
@@ -230,6 +413,14 @@ def pass_ru(ru_needed):
                 elif pos == "adj":
                     if "comparative" in tags:
                         adjs.setdefault(word, {})["comparative"] = fw
+                    elif tags == {"feminine", "nominative"}:
+                        adjs.setdefault(word, {}).setdefault("f", fw)
+                    elif tags == {"neuter", "nominative"}:
+                        adjs.setdefault(word, {}).setdefault("n", fw)
+                    elif tags == {"nominative", "plural"}:
+                        adjs.setdefault(word, {}).setdefault("pl", fw)
+                    elif tags == {"accusative", "feminine"}:
+                        adjs.setdefault(word, {}).setdefault("acc_f", fw)
     return verbs, nouns, adjs
 
 
@@ -249,6 +440,10 @@ def build():
         for _, variants in trs:
             for w, _ in variants:
                 ru_needed.add(w)
+    # русские слова из ручных переводов (для рода и парадигм)
+    for variants in MANUAL.values():
+        for v in variants:
+            ru_needed.add(v.split("|")[0])
     print(f"  русских слов в переводах: {len(ru_needed)}")
 
     print("проход 2: русский дамп...")
@@ -283,8 +478,19 @@ def build():
                     sense_out.append((prio, w))
                 elif pos == "noun" and tag == "plural" and w in nouns and nouns[w].get("plural"):
                     sense_out.append((prio, nouns[w]["plural"]))
-                elif pos == "adj" and tag == "comparative" and w in adjs and adjs[w].get("comparative"):
-                    sense_out.append((prio, adjs[w]["comparative"]))
+                elif pos == "adj":
+                    if tag == "comparative" and w in adjs and adjs[w].get("comparative"):
+                        sense_out.append((prio, adjs[w]["comparative"]))
+                        continue
+                    # парадигма "м|ж|с|мн[|ж.вин]" — согласование на устройстве
+                    a = adjs.get(w)
+                    if tag == "" and a and a.get("f") and a.get("n"):
+                        paradigm = f"{w}|{a['f']}|{a['n']}|{a.get('pl') or w}"
+                        if a.get("acc_f"):
+                            paradigm += f"|{a['acc_f']}"
+                        sense_out.append((prio, paradigm))
+                    else:
+                        sense_out.append((prio, w))
                 else:
                     sense_out.append((prio, w))
             # совершенный вид первым — но только внутри своего значения,
@@ -338,16 +544,30 @@ def build():
 
     print(f"  строк words: {len(rows)}")
 
-    # Ручные переопределения для слов, где первые значения Викисловаря
-    # дают не то («they»: первые значения — про singular they)
-    OVERRIDES = {
-        "they": ["они"],
-        "them": ["их", "им"],
-        "their": ["их"],
+    # Ручные переводы (MANUAL): заменяют варианты существующих строк
+    # и добавляют слова, которых в дампе нет вовсе
+    for (form, pos, tag, lemma), variants in MANUAL.items():
+        key = (form, pos)
+        if key in rows:
+            l, t, _ = rows[key]
+            rows[key] = (l, t, json.dumps(variants, ensure_ascii=False))
+        else:
+            rows[key] = (lemma, tag, json.dumps(variants, ensure_ascii=False))
+
+    # Переопределения по лемме и тегу формы: у частых слов первое значение
+    # Викисловаря — не самое ходовое (walked: «шла», а не «ходила»)
+    LEMMA_OVERRIDES = {
+        ("walk", "verb"): {
+            "": ["идти", "ходить", "гулять"],
+            "past": ["шёл|шла|шло|шли", "ходил|ходила|ходило|ходили"],
+            "pastpart": ["шёл|шла|шло|шли", "ходил|ходила|ходило|ходили"],
+            "pres3": ["идёт", "ходит"],
+        },
     }
     for (form, pos), (lemma, tag, _) in list(rows.items()):
-        if form in OVERRIDES:
-            rows[(form, pos)] = (lemma, tag, json.dumps(OVERRIDES[form], ensure_ascii=False))
+        ov = LEMMA_OVERRIDES.get((lemma, pos))
+        if ov and tag in ov:
+            rows[(form, pos)] = (lemma, tag, json.dumps(ov[tag], ensure_ascii=False))
 
     # фразы: лемматизация слов фразы через построенную карту форм
     form2lemma = {}
@@ -419,6 +639,9 @@ def build():
         os.remove(OUT)
     con = sqlite3.connect(OUT)
     cur = con.cursor()
+    # версия данных: приложение сравнивает user_version своей копии
+    # с базой в assets — размер файла при обновлениях может совпасть
+    cur.execute(f"PRAGMA user_version = {int(time.time())}")
     cur.executescript("""
         PRAGMA journal_mode = OFF;
         PRAGMA synchronous = OFF;
@@ -430,6 +653,7 @@ def build():
                              src TEXT NOT NULL,
                              ru_m TEXT, ru_f TEXT, ru_n TEXT, ru_pl TEXT);
         CREATE INDEX idx_phrases_lemmas ON phrases(lemmas);
+        CREATE TABLE ru_gender(word TEXT PRIMARY KEY, gender TEXT NOT NULL);
     """)
     cur.executemany(
         "INSERT OR IGNORE INTO words(form, pos, lemma, tags, tr) VALUES (?,?,?,?,?)",
@@ -439,13 +663,22 @@ def build():
         "INSERT INTO phrases(lemmas, ru, src, ru_m, ru_f, ru_n, ru_pl) VALUES (?,?,?,?,?,?,?)",
         phrase_rows_full,
     )
+    gender_rows = [(w, n["gender"]) for w, n in nouns.items() if n.get("gender")]
+    # род и у форм мн. числа («The women walked» → женщины → ж.р.)
+    gender_rows += [(n["plural"], n["gender"]) for n in nouns.values()
+                    if n.get("gender") and n.get("plural")]
+    cur.executemany(
+        "INSERT OR IGNORE INTO ru_gender(word, gender) VALUES (?,?)",
+        gender_rows,
+    )
     con.commit()
     con.execute("VACUUM")
     con.close()
 
     gendered = sum(1 for r in phrase_rows_full if r[3])
     size = os.path.getsize(OUT) / 1e6
-    print(f"готово: {OUT}, {size:.1f} МБ, слов {len(rows)}, фраз {len(phrase_rows_full)} (с родами: {gendered})")
+    print(f"готово: {OUT}, {size:.1f} МБ, слов {len(rows)}, фраз {len(phrase_rows_full)} "
+          f"(с родами: {gendered}), ru_gender: {len(gender_rows)}")
 
 
 if __name__ == "__main__":
