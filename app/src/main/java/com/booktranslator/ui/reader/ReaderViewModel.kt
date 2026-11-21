@@ -13,9 +13,13 @@ import com.booktranslator.data.settings.AppFontFamily
 import com.booktranslator.data.settings.ReaderSettings
 import com.booktranslator.data.settings.SettingsRepository
 import com.booktranslator.model.BookContent
+import com.booktranslator.model.BookDictionary
 import com.booktranslator.model.IdiomDictionary
+import com.booktranslator.model.WordDictionaryProvider
 import com.booktranslator.model.WordSpan
 import com.booktranslator.model.WordSplitter
+import com.booktranslator.model.formatFromDictionary
+import com.booktranslator.model.sentenceStartBefore
 import com.booktranslator.BookTranslatorApp
 import com.booktranslator.parse.BookParser
 import com.booktranslator.translate.Translator
@@ -38,7 +42,8 @@ class ReaderViewModel(
     private val repository: BookRepository,
     private val settingsRepository: SettingsRepository,
     private val translator: Translator,
-    private val idiomDictionary: IdiomDictionary,
+    private val dictionaryProvider: WordDictionaryProvider,
+    private val appContext: Context,
     private val bookId: Long
 ) : ViewModel() {
 
@@ -52,29 +57,43 @@ class ReaderViewModel(
     private val _translations = MutableStateFlow<Map<String, SpanTranslation>>(emptyMap())
     val translations: StateFlow<Map<String, SpanTranslation>> = _translations.asStateFlow()
 
+    /** Словарь открытой книги и фразы; грузятся следом за текстом книги. */
+    private var bookDictionary: BookDictionary? = null
+    private var idiomDictionary: IdiomDictionary? = null
+
     init {
         viewModelScope.launch(Dispatchers.IO) {
             val book = repository.getBook(bookId)
-            _state.value = when {
-                book == null -> ReaderState.Error("Книга не найдена в каталоге")
+            val parsed = when {
+                book == null -> null
                 else -> runCatching { BookParser.parse(File(book.filePath), book.format) }
-                    .fold(
-                        onSuccess = { ReaderState.Ready(book, it) },
-                        onFailure = {
-                            ReaderState.Error(it.message ?: "Не удалось прочитать книгу")
-                        }
-                    )
+                    .getOrNull()
+            }
+            if (book == null) {
+                _state.value = ReaderState.Error("Книга не найдена в каталоге")
+                return@launch
+            }
+            if (parsed == null) {
+                _state.value = ReaderState.Error("Не удалось прочитать книгу")
+                return@launch
+            }
+            _state.value = ReaderState.Ready(book, parsed)
+            // Словарь книги и фразы — в память, пока книга открыта
+            runCatching {
+                bookDictionary = BookDictionary.build(dictionaryProvider, parsed.paragraphs)
+                idiomDictionary = IdiomDictionary.load(dictionaryProvider, appContext)
             }
         }
     }
 
     /**
-     * Тап по слову:
-     * - тап внутри уже переведённого фрагмента — убирает перевод;
-     * - слово входит в устойчивое выражение из словаря идиом — переводится
-     *   вся фраза (без вызова модели, перевод из словаря);
-     * - иначе — одиночное слово переводится моделью.
-     * Перевод показывается под словом/фразой, английский текст не меняется.
+     * Тап по слову. Цепочка перевода:
+     * 1. тап внутри уже переведённого фрагмента — снять перевод;
+     * 2. слово внутри устойчивого выражения — перевод всей фразы из словаря;
+     * 3. слово есть в словаре книги — словарный перевод с учётом времени
+     *    и рода (род — по местоимению слева; если его нет — уточнение
+     *    моделью с контекстом предложения);
+     * 4. слова нет в словаре — перевод моделью (подсвечивается красным).
      */
     fun onWordTapped(paragraphIndex: Int, span: WordSpan) {
         val ready = _state.value as? ReaderState.Ready ?: return
@@ -90,38 +109,89 @@ class ReaderViewModel(
             return
         }
 
-        // Проверяем устойчивое выражение (идиому) вокруг тапнутого слова
         val spans = WordSplitter.split(paragraph)
         val tappedIndex = spans.indexOfFirst { it.start == span.start }
-        val idiom = idiomDictionary.find(paragraph, spans, tappedIndex)
-        if (idiom != null) {
-            val key = "$paragraphIndex:${idiom.start}:${idiom.end}"
-            _translations.value = _translations.value + (key to SpanTranslation(
-                start = idiom.start,
-                end = idiom.end,
-                original = idiom.phrase,
-                translation = idiom.translation,
-                fromIdiom = true
-            ))
+        if (tappedIndex < 0) return
+        val dict = bookDictionary
+
+        // Устойчивое выражение вокруг тапнутого слова
+        if (dict != null) {
+            val idiom = idiomDictionary?.find(paragraph, spans, tappedIndex, dict)
+            if (idiom != null) {
+                putTranslation(paragraphIndex, SpanTranslation(
+                    start = idiom.start,
+                    end = idiom.end,
+                    original = idiom.phrase,
+                    translation = idiom.translation,
+                    fromIdiom = true
+                ))
+                return
+            }
+        }
+
+        // Слово из словаря книги
+        val entries = dict?.lookup(span.word.lowercase())
+        if (!entries.isNullOrEmpty()) {
+            val result = formatFromDictionary(entries, paragraph, spans, tappedIndex)
+            if (result.genderUnresolved) {
+                // Глагол прош. вр. без местоимения слева — уточняем моделью
+                // с контекстом предложения; не вышло — показываем все формы
+                viewModelScope.launch {
+                    val start = sentenceStartBefore(paragraph, span.start)
+                    val fragment = paragraph.substring(start, span.end)
+                    try {
+                        val translation = translator.translate(fragment)
+                        putTranslation(paragraphIndex, SpanTranslation(
+                            start = start,
+                            end = span.end,
+                            original = fragment,
+                            translation = translation,
+                            fromIdiom = false,
+                            fromModel = true
+                        ))
+                    } catch (e: Exception) {
+                        putTranslation(paragraphIndex, SpanTranslation(
+                            start = span.start,
+                            end = span.end,
+                            original = span.word,
+                            translation = result.text,
+                            fromIdiom = false
+                        ))
+                    }
+                }
+            } else {
+                putTranslation(paragraphIndex, SpanTranslation(
+                    start = span.start,
+                    end = span.end,
+                    original = span.word,
+                    translation = result.text,
+                    fromIdiom = false
+                ))
+            }
             return
         }
 
-        // Обычное слово — перевод моделью
+        // Слова нет в словаре — перевод моделью (подсветка красным)
         viewModelScope.launch {
             try {
                 val translation = translator.translate(span.word)
-                val key = "$paragraphIndex:${span.start}:${span.end}"
-                _translations.value = _translations.value + (key to SpanTranslation(
+                putTranslation(paragraphIndex, SpanTranslation(
                     start = span.start,
                     end = span.end,
                     original = span.word,
                     translation = translation,
-                    fromIdiom = false
+                    fromIdiom = false,
+                    fromModel = true
                 ))
             } catch (e: Exception) {
                 // Ошибка перевода — просто не добавляем подстрочник
             }
         }
+    }
+
+    private fun putTranslation(paragraphIndex: Int, tr: SpanTranslation) {
+        val key = "$paragraphIndex:${tr.start}:${tr.end}"
+        _translations.value = _translations.value + (key to tr)
     }
 
     fun savePosition(index: Int, offset: Int) {
@@ -160,7 +230,8 @@ class ReaderViewModel(
                     BookRepository(AppDatabase.get(app).bookDao(), app),
                     SettingsRepository(app),
                     app.translator,
-                    IdiomDictionary(app),
+                    app.dictionaryProvider,
+                    app.applicationContext,
                     bookId
                 )
             }

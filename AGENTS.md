@@ -67,8 +67,15 @@ ONNX Runtime.
     (инференс ONNX: tok-encode → encoder → жадный декодер с KV-кэшем →
     tok-decode), `CachingTranslator` (кэш в Room).
   - `model/WordSpan.kt` — разбиение текста на кликабельные слова.
-  - `model/IdiomDictionary.kt` — словарь устойчивых выражений
-    (`assets/idioms.json`), поиск самого длинного совпадения при тапе.
+  - `model/WordDictionary.kt` — словарный уровень: `WordDictionaryProvider`
+    (база `assets/dict/dictionary.db`, копирование в filesDir с перезаписью
+    при изменении размера) и `BookDictionary` (словарь открытой книги
+    в памяти: словоформы книги → статьи, лемматизация).
+  - `model/DictionaryLookup.kt` — выбор словарного перевода с учётом
+    времени/числа и рода по местоимению слева в предложении.
+  - `model/IdiomDictionary.kt` — устойчивые выражения (таблица phrases
+    словарной базы + ручной `assets/idioms.json`), поиск самого длинного
+    совпадения при тапе по ЛЕММАМ (а не точным словоформам).
   - `ui/catalog/` — экран каталога (список, добавление, удаление книг).
   - `ui/reader/` — экран чтения (прокрутка, сохранение позиции,
     панель настроек `ReaderSettingsSheet`, оглавление с переходом к главе,
@@ -77,10 +84,16 @@ ONNX Runtime.
   - `app/src/main/assets/model/` — int8 ONNX-модели encoder/decoder/
     decoder_with_past + токенизаторные графы tok-encode/tok-decode
     (всего ~220 МБ).
+  - `app/src/main/assets/dict/` — словарная база SQLite en→ru (~12.5 МБ,
+    хранится несжатой — `noCompress "db"` в build.gradle.kts).
 - `tools/` — инструменты конвертации модели (venv, скрипты
   `build_tokenizers.py`, `test_translate.py`, `test_translate_past.py`,
   исходные файлы HF в `tools/hf/`).
   Не нужны для сборки приложения.
+- `tools/wiktionary/` — сборка словарной базы из дампов kaikki.org
+  (`build_dictionary.py`; дампы `*.jsonl.gz` и итоговый `dictionary.db`
+  в .gitignore — пересобираются скриптом, итог копируется в
+  `app/src/main/assets/dict/`).
 - `samples/` — тестовые файлы для эмулятора (`sample-en.txt`,
   `paper-texture.png`).
   - `ui/theme/Theme.kt` — тема Material 3.

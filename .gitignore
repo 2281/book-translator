@@ -10,3 +10,6 @@ tools/onnx-fp32/
 tools/onnx-int8/
 .kotlin/
 *.apk
+# Дампы Викисловаря и собранная из них БД (пересобираются скриптом)
+tools/wiktionary/*.jsonl.gz
+tools/wiktionary/dictionary.db

@@ -15,6 +15,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.automirrored.filled.MenuBook
 import androidx.compose.material3.Card
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -32,6 +33,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -48,6 +50,7 @@ fun CatalogScreen(onOpenBook: (Long) -> Unit) {
     val books by viewModel.books.collectAsState()
     val importError by viewModel.importError.collectAsState()
     val snackbarHostState = remember { SnackbarHostState() }
+    var showAbout by remember { androidx.compose.runtime.mutableStateOf(false) }
 
     val picker = rememberLauncherForActivityResult(
         ActivityResultContracts.OpenDocument()
@@ -62,8 +65,21 @@ fun CatalogScreen(onOpenBook: (Long) -> Unit) {
         }
     }
 
+    if (showAbout) {
+        AboutDialog(onDismiss = { showAbout = false })
+    }
+
     Scaffold(
-        topBar = { TopAppBar(title = { Text("Каталог книг") }) },
+        topBar = {
+            TopAppBar(
+                title = { Text("Каталог книг") },
+                actions = {
+                    IconButton(onClick = { showAbout = true }) {
+                        Icon(Icons.Default.Info, contentDescription = "О программе")
+                    }
+                }
+            )
+        },
         snackbarHost = { SnackbarHost(snackbarHostState) },
         floatingActionButton = {
             FloatingActionButton(onClick = { picker.launch(arrayOf("*/*")) }) {
@@ -102,6 +118,38 @@ fun CatalogScreen(onOpenBook: (Long) -> Unit) {
             }
         }
     }
+}
+
+@Composable
+private fun AboutDialog(onDismiss: () -> Unit) {
+    val context = LocalContext.current
+    val version = remember {
+        runCatching {
+            val info = context.packageManager.getPackageInfo(context.packageName, 0)
+            info.versionName
+        }.getOrDefault("")
+    }
+    androidx.compose.material3.AlertDialog(
+        onDismissRequest = onDismiss,
+        confirmButton = {
+            androidx.compose.material3.TextButton(onClick = onDismiss) {
+                Text("Закрыть")
+            }
+        },
+        title = { Text("Book Translator $version") },
+        text = {
+            Text(
+                "Читалка с оффлайн-переводом слов и устойчивых выражений " +
+                    "английский → русский по тапу.\n\n" +
+                    "Словарь собран из машиночитаемой Викисловаря " +
+                    "(kaikki.org, на основе Wiktionary), лицензия CC BY-SA 3.0. " +
+                    "Частотный список — FrequencyWords (hermitdave), " +
+                    "CC BY-SA 4.0.\n\n" +
+                    "Нейросетевая модель перевода — Helsinki-NLP " +
+                    "opus-mt-en-ru (CC-BY 4.0), конвертирована в ONNX."
+            )
+        }
+    )
 }
 
 @Composable
